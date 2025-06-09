@@ -10,6 +10,7 @@ try:
 except ImportError:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "--user", "ttkbootstrap"])
     import ttkbootstrap as ttk
+from ttkbootstrap.style import Style
 from tkinter import filedialog, messagebox
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -129,6 +130,7 @@ class DartGUI:
         self.root = root
         self.root.title("DART Detachment Analysis with Reduced modelling Tools: Henderson et al. 2025 NF 65 016033 (DOI: 10.1088/1741-4326/ad93e7)")
         # Toolbar
+        self.style = Style("litera")
         menubar = tk.Menu(root)
         root.config(menu=menubar)
         # Create File menu
@@ -137,9 +139,16 @@ class DartGUI:
         file_menu.add_command(label="Load session", command=self.load_session)
         file_menu.add_separator()
         file_menu.add_command(label="Exit", command=self.exit_app)
-
+        theme_menu = tk.Menu(menubar,tearoff=0)
+        style = Style()
+        available_themes = style.theme_names()
+        for theme in available_themes:
+            theme_menu.add_command(label=theme,command=lambda t=theme: self.change_theme(t))
+                    
         # Add File menu to menubar
         menubar.add_cascade(label="File", menu=file_menu)
+        menubar.add_cascade(label="Theme", menu=theme_menu)
+        
         # Layout
         self.main_frame = tk.Frame(root)
         self.main_frame.pack(fill=tk.BOTH, expand=True)
@@ -371,6 +380,12 @@ class DartGUI:
         toolbar.update()
         toolbar.grid(row=1, column=0,sticky="nsew")
         self.canvas_useful.get_tk_widget().grid()
+    def change_theme(self,theme_name):
+        try:
+            self.style.theme_use(theme_name)
+            print(f"Theme changed to: {theme_name}")
+        except Exception as e:
+            messagebox.showerror("Theme error: ",f"Could not apply theme: {e}")
     def exit_app(self):
         root.quit()
     def save_session(self):
