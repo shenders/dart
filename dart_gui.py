@@ -123,6 +123,8 @@ class WaveformEditor:
     def update_plot(self):
         self.line.set_ydata(self.y)
         self.line.set_xdata(self.x)
+        self.ax.set_xlim(min(self.x)*0.9, max(self.x)*1.1)
+        self.ax.set_ylim(0, max(self.y)*1.1)
         self.canvas.draw()
 
 class DartGUI:
@@ -237,12 +239,19 @@ class DartGUI:
         self.pfr_gas_menu.grid(row=5, column=1, sticky="ew")        
 
         # Plasma particle confinement input
-        x=np.array([-100,15.0 ,20.0 ,110.0,300.0,400.0,1000.0,1100.0])
-        y=np.array([0   ,0.0  ,2.0  ,2.0  ,3.0  ,3.0  ,0.8   ,0.0])
-        self.wave_frame = tk.LabelFrame(self.guide_tab, text="Reservoir plasma particle confinement")
-        self.wave_frame.grid(row=3, column=0, columnspan=2, pady=5, sticky="nsew")
+        x = np.array([0.015, 0.3, 0.9])*1000
+        y = np.array([0.005]*len(x))*1000
+        #x=np.array([-100,15.0 ,20.0 ,110.0,300.0,400.0,1000.0,1100.0])
+        #y=np.array([0   ,0.0  ,2.0  ,2.0  ,3.0  ,3.0  ,0.8   ,0.0])
+        self.conf_frame = tk.LabelFrame(self.guide_tab, text="Reservoir plasma particle confinement")
+        self.conf_frame.grid(row=3, column=0, columnspan=2, pady=5, sticky="nsew")
+        self.wave_frame =tk.LabelFrame(self.conf_frame) 
+        self.wave_frame.grid(row=0, column=0, columnspan=2, padx=5, sticky="nsew")
         self.editor = WaveformEditor(self.wave_frame,x/1000.0,y)
         self.wave_frame.grid_propagate(False)
+        self.fit_var = tk.IntVar()
+        self.fit_tau = ttk.Checkbutton(self.conf_frame, text=r"Fit confinement time", variable=self.fit_var)
+        self.fit_tau.grid(row=1, column=0, columnspan=2, pady=5, sticky="nsew")
 
         self.diffusion_frame = tk.LabelFrame(self.guide_tab, text="Reservoir diffusion inputs")
         self.diffusion_frame.grid(row=4, column=0, columnspan=2, pady=5, sticky="nsew")
@@ -654,12 +663,14 @@ class DartGUI:
         self.dart.p0up = plasma_details.p0up
         self.dart.closure=float(self.closure_entry.get())
         self.dart.div2sub=float(self.div2sub_entry.get())
+        
         hfs_frac       = 1.0 - 0.01 - float(self.frac_div_entry.get()) - float(self.frac_lfs_entry.get())
         self.dart.plasma_fracs=[float(self.frac_div_entry.get()),float(self.frac_lfs_entry.get()),hfs_frac,0.01,0.0]
         self.dart.alft = np.radians(plasma_details.alft)  
-        conftime       = self.editor.x 
-        conf           = self.editor.y 
-        pconftime      = interp1d(conftime,conf/1000.0,bounds_error=False, fill_value=0.0)
+        self.dart.conftime = np.array(self.editor.x)
+        self.dart.conf     = np.array(self.editor.y)/1000.0
+        self.dart.fitconf  = self.fit_var.get()                
+        pconftime          = interp1d(self.dart.conftime,self.dart.conf,bounds_error=False, fill_value=0.0)
         self.dart.plasma_conf = pconftime(self.dart.time)
         if self.cryo.get():
             self.dart.Spump = 10.0
@@ -671,6 +682,9 @@ class DartGUI:
         self.dart.ne_fit    = plasma_details.ne_fit
         self.dart.runGUIDE()
         self.shotprogress_bar["value"] = 90.0
+        self.editor.x = np.array(self.dart.conftime)
+        self.editor.y = np.array(self.dart.conf)*1000.0
+        self.editor.update_plot()
         self.root.update_idletasks()  # Refresh GUI
 
         self.plot_shot()
@@ -731,5 +745,5 @@ class DartGUI:
 if __name__ == "__main__":
     root = ttk.Window(themename="litera")
     app = DartGUI(root)
-    root.geometry("1600x900")  # Adjust window size as needed
+    root.geometry("1600x950")  # Adjust window size as needed
     root.mainloop()

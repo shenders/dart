@@ -3,23 +3,10 @@ import matplotlib.pyplot as plt
 from scipy.interpolate import interp1d
 from scipy.signal import convolve
 from pipeinjector import piezo
+from scipy.optimize import minimize
+
 import pyuda
 client = pyuda.Client()
-
-def gaussian_kernel(t_array, width):
-    t_mid = (t_array[-1] + t_array[0]) / 2
-    kernel = np.exp(-0.5 * ((t_array - t_mid) / width) ** 2)
-    return kernel / np.sum(kernel)  # Normalize
-# Function for smoothing Gamma (gas flow) with the custom kernel
-def smooth_gas_flow(Gamma_raw, dt, kernel):
-    """Smooth the raw gas flow using the Gaussian kernel."""
-    return np.convolve(Gamma_raw, kernel, mode='same')
-def safe_fraction(partial, total, threshold=1e-10):
-    if total > threshold:
-        species_fraction = partial / total
-    else:
-        species_fraction = np.zeros_like(partial)    
-    return species_fraction 
 # Constants
 kB       = 1.38e-23         # Boltzmann constant [J/K] 
 T_pump   = 300.0            # Temperature at pump [K]
@@ -31,10 +18,42 @@ V_div    = 2.66
 V_sdiv   = 1.51
 A        = kB * T_pump      # Pre-factor in pressure equation
 
+def fit_confinement_time(tdens, dens, shot, initial_knots, initial_tau_guess, **kwargs):
+    import tkinter as tk
+    root = tk.Tk()
+    root.withdraw()
+    popup = tk.Toplevel(root)
+    popup.title("Fitting Progress")
+    popup.geometry("300x50")
+    label = tk.Label(popup, text="Starting fit...")
+    label.pack(padx=20, pady=10)
+    popup.update()
+    finite_mask = ~np.isnan(dens) & ~np.isinf(dens)
+    dens = dens[finite_mask]
+    tdens = tdens[finite_mask]
+    model = pressure(shot, plasma=True,dt=0.001, 
+                     plasma_conf=initial_tau_guess, plasma_conftime=initial_knots,track=False, **kwargs)
+    def loss(tau_values,model):
+        model.plasma_conf = interp1d(initial_knots ,tau_values,bounds_error=False, fill_value=0.0)
+        model.track_particles()
+        model_density_interp = interp1d(model.t_array, model.electron_density[:,0],kind='linear',fill_value='extrapolate')
+        model_density = model_density_interp(tdens)
+        chi2n = np.sum((model_density/1e19 - dens/1e19)**2)/(len(dens)-len(tau_values))
+        label.config(text=f"Normalised chi^2={chi2n:.2f}")
+        popup.update()
+        return np.mean((model_density/1e19 - dens/1e19)**2)
+    bounds = [(1e-6, 1000.0) for _ in initial_tau_guess]
+    res = minimize(loss, initial_tau_guess, args=(model,),method='Nelder-Mead', tol=1e-3,options={'disp': True, 'maxiter': 100,'adaptive':True})
+    label = tk.Label(popup, text="Complete...")
+    popup.destroy()
+    root.destroy()
+    return res
+
 class pressure:
-    def __init__(self,shot,plasma_conf=None,plasma_conftime=None,closure_time=0.4,subdiv_time=0.5,
-                 plasma=True,cryo=False,turbo=True,drsep=None,volume=None,voltime=None,
+    def __init__(self,shot,plasma_conf=None,plasma_conftime=None,closure_time=2.0,subdiv_time=0.5,
+                 plasma=True,cryo=False,turbo=True,drsep=None,volume=None,voltime=None,dt=0.0005,track=True,
                  drseptime=None,gasvolts=False,valve='all',gas_matrix=None,plasma_fracs=[0.1,0.12,0.77,0.01,0.0]):
+        self.dt = dt
         self.loaded = False
         self.turbo = turbo
         self.species_list = ['D','N']
@@ -70,7 +89,8 @@ class pressure:
         self.setup_times(closure_time=closure_time,subdiv_time=subdiv_time,plasma_fracs=plasma_fracs)
         self.setup_pumping()
         self.setup_influx(shot,gasvolts=gasvolts,valve=valve,gas_matrix=gas_matrix)
-        self.track_particles()
+        if track:
+            self.track_particles()
 
     def setup_times(self,closure_time=0.4,subdiv_time=0.5,plasma_fracs=[0.1,0.12,0.77,0.01,0.0]):
         # Setup conductances between reservoirs
@@ -243,7 +263,6 @@ class pressure:
         t_start                 = -0.08
         t_end                   = 1.0
         # Initialise arrays
-        self.dt                 = 0.0005
         self.t_array            = np.arange(t_start, t_end, self.dt)
         self.hfs_main           = np.zeros((len(self.t_array),self.nspecies))
         self.lfs_main           = np.zeros((len(self.t_array),self.nspecies))
@@ -627,20 +646,30 @@ if __name__ == "__main__":
     calfac = 1.0
     if plasma:
     # Plasma pulse
-        shot = 51787
+        shot = 51892
         status = client.get('/epm/equilibriumStatusInteger', shot).data
         drsep = client.get('/epm/output/separatrixGeometry/drsepOut', shot).data[status==1]
         drseptime = client.get('/epm/time', shot).data[status==1]
-        data  = client.get('/ane/density',shot)
+        #data  = client.get('/ane/density',shot)
+        data  = client.get('/esm/density/nebar',shot)
         tdens = np.array(data.time.data)
-        dens  = np.array(data.data)/5
+        dens  = np.array(data.data)
         turbo = True
         cryo = False
         gasvolts  = False
         valve = 'all'
-        plasma_conftime  = [-0.1,0.015 ,0.02 ,0.06  ,0.11  ,0.12  ,0.2   ,0.4  ,0.5  ,0.6  ,1.01 ,2.0] 
-        plasma_conf      = [0   ,0.0   ,0.002,0.002 ,0.002 ,0.0018,0.0015,0.002 ,0.0018 ,0.0019 ,0.0008,0.0]
+        initial_knots = [0.015, 0.3, 0.9]
+        initial_tau_guess = [0.008]*len(initial_knots)
+        fit_result = fit_confinement_time(tdens, dens, shot,
+                                       initial_knots, initial_tau_guess,
+                                       drsep=drsep, drseptime=drseptime,
+                                       turbo=turbo, cryo=cryo, valve=valve,
+                                       gasvolts=gasvolts)
 
+    # Use the best-fit result to re-run the model and display
+        plasma_conf = fit_result.x
+        plasma_conftime = initial_knots
+        print("best fit calculated:",fit_result.x)
     else:
         if valve == 'hfs_mid_u02':
             shot = 50012
@@ -721,11 +750,11 @@ if __name__ == "__main__":
         plt.savefig("mast_u_regions_highres.png", dpi=300,transparent=True)
         plt.show()
         exit()        
-    run  = pressure(shot,cryo=cryo,turbo=turbo,plasma=plasma,drsep=drsep,
-                    plasma_conf=plasma_conf,plasma_conftime=plasma_conftime,
-                    drseptime=drseptime,valve=valve,gasvolts=gasvolts,closure_time=0.8)
-    run.display(time=time_press,p0_sublowdiv=p0_sublowdiv,p0_subuppdiv=p0_subuppdiv,
-                p0_main=p0_main,tdens=tdens,dens=dens,shot=shot,calfac=calfac)
+    run = pressure(shot, plasma_conf=plasma_conf, plasma_conftime=plasma_conftime,
+                   cryo=cryo, turbo=turbo, plasma=True, drsep=drsep,
+                   drseptime=drseptime, valve=valve, gasvolts=gasvolts)
+    run.display(tdens=tdens, dens=dens, time=time_press,
+                p0_sublowdiv=p0_sublowdiv, p0_subuppdiv=p0_subuppdiv, p0_main=p0_main)
 
 
 

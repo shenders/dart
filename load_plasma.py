@@ -52,8 +52,8 @@ class plasma:
             root.update_idletasks()  # Refresh GUI
         try:
             # Load in line integrated density
-            data_dens  = self.common_time(client,'/ane/density',shot)
-            self.dens  = data_dens(self.time)/5.0
+            data_dens  = self.common_time(client,'/esm/density/nebar',shot)
+            self.dens  = data_dens(self.time)
         except Exception as e:
             self.dens  = np.zeros(len(self.time))
             print("Interferometer loading error:",e)

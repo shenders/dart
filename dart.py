@@ -120,7 +120,7 @@ class dart:
                     self.lc[i] = self.kp[i] * np.pi * self.am[i] * self.B0[i] / self.Bp[i]
         self.lx = self.lc/2.0
     def runGUIDE(self):
-        from pressure import pressure
+        from pressure import pressure, fit_confinement_time
         if self.Spump > 0:
             cryo = True
         else:
@@ -129,6 +129,20 @@ class dart:
         drsep  = [-0.07 , -0.02 , -0.015 ,-0.01 ,-0.005 ,0.0 , 0.005 ,0.01 , 0.015 , 0.02 , 0.07]
         fdiv_int  = interp1d(drsep,fdiv,kind='linear',fill_value='extrapolate')
         self.fdiv = fdiv_int(self.drsep)
+        if self.fitconf:
+            print("Fitting confinement time...")
+            print("Initial values:",self.conftime,self.conf)
+            fit_result = fit_confinement_time(self.time, self.dens, self.shot,
+                                              self.conftime, self.conf,                                             
+                                              cryo=cryo,closure_time=self.closure,
+                                              plasma_fracs = self.plasma_fracs,
+                                              drsep=self.drsep,drseptime=self.time,
+                                              gas_matrix=self.gas_matrix,subdiv_time=self.div2sub)
+            print("Fitted values:",fit_result.x)
+            self.conftime = self.conftime
+            self.conf     = fit_result.x
+            pconftime     = interp1d(self.conftime,self.conf,bounds_error=False, fill_value=0.0)
+            self.plasma_conf = pconftime(self.time)
         p0        = pressure(self.shot,plasma_conf=self.plasma_conf,plasma_conftime=self.time,cryo=cryo,closure_time=self.closure,
                              plasma_fracs = self.plasma_fracs,drsep=self.drsep,drseptime=self.time,gas_matrix=self.gas_matrix,subdiv_time=self.div2sub)
         useratio1 = True
@@ -238,14 +252,14 @@ class dart:
         fig.subplots_adjust(hspace=0.09,left=0.1,top=0.96, bottom=0.1,right=0.96)
         self.fs = 16
         def_col = ['black','#E41A1C' ,'#0072B2', '#D95F02', '#4DAF4A', '#377EB8', '#A65628']
-        self.plot_output(axes,0,0,self.time,self.dens/1e19,ylim=[0,6],nrows=nrows,label=r'Line averaged density',col=def_col[0],loc='upper right',xtitle='Time [s]',ytitle=r'm')
-        self.plot_output(axes,0,0,self.time,self.pred_dens/1e19,ylim=[0,6],nrows=nrows,label=r'Pred',col=def_col[1],loc='upper right',xtitle='Time [s]',ytitle=r'm')
-        self.plot_output(axes,1,0,self.time,self.p0mid*1000.0,ylim=[0,10.0],nrows=nrows,label=r'FIG HM12',col=def_col[0],loc='upper right',xtitle='Time [s]',ytitle=r'mPa')
-        self.plot_output(axes,1,0,self.time,self.p0midpred*1000.0,ylim=[0,10.0],nrows=nrows,label=r'Pred',col=def_col[1],loc='upper right',xtitle='Time [s]',ytitle=r'mPa')
-        self.plot_output(axes,0,1,self.time,self.p0up,ylim=[0,2],label=r'FIG HU08',nrows=nrows,col=def_col[0],loc='upper right',xtitle='Time [s]',ytitle=r'Pa')
-        self.plot_output(axes,0,1,self.time,self.p0uppred,ylim=[0,2],label=r'Pred',nrows=nrows,col=def_col[1],loc='upper right',xtitle='Time [s]',ytitle=r'Pa')
-        self.plot_output(axes,1,1,self.time,self.press,ylim=[0,2.0],label=r'FIG HL11',nrows=nrows,loc='upper right',ncol=1,col=def_col[0],ytitle='Pa')
-        self.plot_output(axes,1,1,self.time,self.p0sub,ylim=[0,2.0],label=r'Pred',nrows=nrows,loc='upper right',ncol=1,col=def_col[1],ytitle='Pa')
+        self.plot_output(axes,0,0,self.time,self.dens/1e19,ylim=[0,9],nrows=nrows,label=r'Line averaged density',col=def_col[0],loc='upper right',xtitle='Time [s]',ytitle=r'm')
+        self.plot_output(axes,0,0,self.time,self.pred_dens/1e19,ylim=[0,9],nrows=nrows,label=r'Pred',col=def_col[1],loc='upper right',xtitle='Time [s]',ytitle=r'm')
+        self.plot_output(axes,1,0,self.time,self.p0mid*1000.0,ylim=[0,6.0],nrows=nrows,label=r'FIG HM12',col=def_col[0],loc='upper right',xtitle='Time [s]',ytitle=r'mPa')
+        self.plot_output(axes,1,0,self.time,self.p0midpred*1000.0,ylim=[0,6.0],nrows=nrows,label=r'Pred',col=def_col[1],loc='upper right',xtitle='Time [s]',ytitle=r'mPa')
+        self.plot_output(axes,0,1,self.time,self.p0up,ylim=[0,1.5],label=r'FIG HU08',nrows=nrows,col=def_col[0],loc='upper right',xtitle='Time [s]',ytitle=r'Pa')
+        self.plot_output(axes,0,1,self.time,self.p0uppred,ylim=[0,1.5],label=r'Pred',nrows=nrows,col=def_col[1],loc='upper right',xtitle='Time [s]',ytitle=r'Pa')
+        self.plot_output(axes,1,1,self.time,self.press,ylim=[0,1.5],label=r'FIG HL11',nrows=nrows,loc='upper right',ncol=1,col=def_col[0],ytitle='Pa')
+        self.plot_output(axes,1,1,self.time,self.p0sub,ylim=[0,1.5],label=r'Pred',nrows=nrows,loc='upper right',ncol=1,col=def_col[1],ytitle='Pa')
         if canvas is None:
             plt.show()
         else:
