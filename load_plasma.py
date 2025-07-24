@@ -39,7 +39,22 @@ class plasma:
             data_Ip   = client.get('/amc/plasma_current', shot)
             self.time = np.array(data_Ip.time.data)
             self.Ip   = np.array(data_Ip.data)*1e3
-            idt       = np.where(self.time < 1.0)
+            peak_Ip   = np.max(self.Ip)
+            # Define flat-top as within 5% of the peak
+            flat_top_idxs = np.where(self.Ip > 0.95 * peak_Ip)[0]
+
+            # The flat-top might span multiple points – take the last one
+            last_flat_idx = flat_top_idxs[-1]
+
+            # Find when Ip drops below 80% of peak AFTER flat-top
+            drop_idxs = np.where((np.arange(len(self.Ip)) > last_flat_idx) &
+                                 (self.Ip < 0.8 * peak_Ip))[0]
+
+            if drop_idxs.size > 0:
+                cutoff_idx = drop_idxs[0]
+            else:
+                cutoff_idx = len(self.Ip)
+            idt = np.arange(0, cutoff_idx)
             self.time = self.time[idt]
             self.Ip   = self.Ip[idt]
         except Exception as e:
@@ -125,16 +140,25 @@ class plasma:
             self.Paux   = np.zeros(len(self.time))
             print("NBI loading error:",e)
 
+        loaded = False
         try:
             # Load in IR peak values
             data_IRt2 = self.common_time(client,'/ait/t2lt3l_std/heatflux_peak_value',shot)
             self.IRt2 = data_IRt2(self.time)
+            loaded = True
         except Exception as e:
             print("IR tile 2 loading error:",e)
             self.IRt2 = np.zeros(len(self.time))
-
+        if not loaded:
+            try:
+                data_IRt2 = self.common_time(client,'/ait/t2l_std/heatflux_peak_value',shot)
+                self.IRt2 = data_IRt2(self.time)
+            except Exception as e:
+                print("IR tile 2 loading error:",e)
+                self.IRt2 = np.zeros(len(self.time))
+            
         try:
-            data_IRt5 = self.common_time(client,'/aiv/t5l_std/heatflux_peak_value',shot)
+            data_IRt5 = self.common_time(client,'/ait/t5l_std/heatflux_peak_value',shot)
             self.IRt5 = data_IRt5(self.time)
         except Exception as e:
             print("IR tile 5 loading error:",e)
