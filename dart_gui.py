@@ -2,6 +2,8 @@ import tkinter as tk
 import subprocess
 import json
 import sys
+import copy
+
 if sys.version_info[:2] != (3, 7):
     print("⚠️  This script requires Python 3.7 due to outdated tkinter version 8.5. Please run it with Python 3.7.")
     sys.exit(1)
@@ -113,7 +115,7 @@ class WaveformEditor:
         self.x = self.x[sorted_indices]
         self.y = self.y[sorted_indices]
         self.dragging_point = sorted_indices.tolist().index(self.dragging_point)
-        self.ax.set_xlim(min(self.x)*0.9, max(self.x)*1.1)
+        self.ax.set_xlim(min(self.x)-0.1, max(self.x)*1.1)
         self.ax.set_ylim(0, max(self.y)*1.1)
         self.update_plot()
 
@@ -123,7 +125,7 @@ class WaveformEditor:
     def update_plot(self):
         self.line.set_ydata(self.y)
         self.line.set_xdata(self.x)
-        self.ax.set_xlim(min(self.x)*0.9, max(self.x)*1.1)
+        self.ax.set_xlim(min(self.x)-0.1, max(self.x)*1.1)
         self.ax.set_ylim(0, max(self.y)*1.1)
         self.canvas.draw()
 
@@ -172,11 +174,50 @@ class DartGUI:
         self.aim_label = ttk.Label(self.aim_tab, text="Actuated Input Model (AIM)", font=("Arial", 10, "bold"))
         self.aim_label.grid(row=0,column=0, pady=3,sticky="W")
         self.left_notebook.add(self.aim_tab, text="AIM")
-        #self.left_notebook.title("Actuation Input Model")
-        self.guide_tab = ttk.Frame(self.left_notebook)
-        self.guide_label = ttk.Label(self.guide_tab, text="Gas puffing Influence on Detachment Extent (GUIDE)", font=("Arial", 10, "bold"))
-        self.guide_label.grid(row=0,column=0, pady=3,sticky="W")
-        self.left_notebook.add(self.guide_tab, text="GUIDE")
+
+        self.guide_tab_outer = ttk.Frame(self.left_notebook)
+        self.left_notebook.add(self.guide_tab_outer, text="GUIDE")
+        self.guide_label = ttk.Label(
+            self.guide_tab_outer,
+            text="Gas puffing Influence on Detachment Extent (GUIDE)",
+            font=("Arial", 10, "bold")
+        )
+        self.guide_label.pack(anchor="w", padx=10, pady=(10, 0))
+        self.pulse_frame = tk.LabelFrame(self.guide_tab_outer, text="Device details")
+        self.pulse_frame.pack(fill="x", padx=10, pady=5)
+
+        tk.Label(self.pulse_frame, text="Device:").grid(row=0, column=0, sticky='w')
+        self.device_options = ["MAST-U", "AUG", "JET"]
+        self.device_selected_option = ttk.StringVar()
+        self.dropdown_device = ttk.Combobox(
+            self.pulse_frame, textvariable=self.device_selected_option,
+            values=self.device_options, state="readonly"
+        )
+        self.dropdown_device.grid(row=0, column=1, sticky="w")
+        self.dropdown_device.current(0)
+
+        tk.Label(self.pulse_frame, text="Shot:").grid(row=1, column=0, sticky='w')
+        self.shot_entry = tk.Entry(self.pulse_frame, width=30)
+        self.shot_entry.grid(row=1, column=1, sticky="w")
+        # Wrap canvas + scrollbar in their own horizontal frame
+        self.guide_canvas_frame = ttk.Frame(self.guide_tab_outer)
+        self.guide_canvas_frame.pack(fill="both", expand=True)
+        # Create canvas and scrollbar for GUIDE tab
+        self.guide_canvas = tk.Canvas(self.guide_canvas_frame, height=300)
+        self.guide_scrollbar = ttk.Scrollbar(self.guide_canvas_frame, orient="vertical", command=self.guide_canvas.yview)
+
+        self.guide_tab = ttk.Frame(self.guide_canvas)
+        self.guide_tab.bind(
+            "<Configure>",
+            lambda e: self.guide_canvas.configure(scrollregion=self.guide_canvas.bbox("all"))
+        )
+
+        self.guide_canvas.create_window((0, 0), window=self.guide_tab, anchor="nw")
+        self.guide_canvas.configure(yscrollcommand=self.guide_scrollbar.set)
+
+        self.guide_canvas.pack(side="left", fill="both", expand=True)
+        self.guide_scrollbar.pack(side="right", fill="y")
+
         # Right side plot windows 
         self.right_notebook = ttk.Notebook(self.right_frame)
         self.right_notebook.pack()
@@ -188,23 +229,6 @@ class DartGUI:
         self.useful_tab = ttk.Frame(self.right_notebook)
         self.right_notebook.add(self.useful_tab, text="Plot panel 3")
 
-        # GUIDE display        
-        self.pulse_frame = tk.LabelFrame(self.guide_tab, text="Device details")
-        self.pulse_frame.grid(row=1, column=0, columnspan=2, pady=5, sticky="nsew")
-        tk.Label(self.pulse_frame, text="Device:").grid(row=0, column=0, sticky='w')
-        self.device_options = ["MAST-U","AUG","JET"]
-        self.device_selected_option = ttk.StringVar()
-        self.dropdown_device = ttk.Combobox(self.pulse_frame,textvariable=self.device_selected_option,values=self.device_options,state="readonly")
-        self.dropdown_device.grid(row=0, column=1, sticky="w")
-        self.dropdown_device.current(0)
-        tk.Label(self.pulse_frame, text="Shot:").grid(row=1, column=0, sticky='w')
-        self.shot_entry = tk.Entry(self.pulse_frame, width=30)
-        self.shot_entry.grid(row=1, column=1, sticky="w")
-        # Pumping
-        tk.Label(self.pulse_frame, text="Lower cryopump:").grid(row=2, column=0, sticky='w')
-        self.cryo = tk.IntVar(value=1)
-        self.cryo_checkbox = ttk.Checkbutton(self.pulse_frame, variable=self.cryo)
-        self.cryo_checkbox.grid(row=2, column=1, sticky="nsew")
 
         # Gas valves
         self.valve_frame = tk.LabelFrame(self.guide_tab, text="Gas species")
@@ -238,20 +262,6 @@ class DartGUI:
         self.pfr_gas_menu = ttk.Combobox(self.valve_frame, textvariable=self.pfr_gas_var, values=gas_options, state="readonly")
         self.pfr_gas_menu.grid(row=5, column=1, sticky="ew")        
 
-        # Plasma particle confinement input
-        x = np.array([0.015, 0.3, 0.9])*1000
-        y = np.array([0.005]*len(x))*1000
-        #x=np.array([-100,15.0 ,20.0 ,110.0,300.0,400.0,1000.0,1100.0])
-        #y=np.array([0   ,0.0  ,2.0  ,2.0  ,3.0  ,3.0  ,0.8   ,0.0])
-        self.conf_frame = tk.LabelFrame(self.guide_tab, text="Reservoir plasma particle confinement")
-        self.conf_frame.grid(row=3, column=0, columnspan=2, pady=5, sticky="nsew")
-        self.wave_frame =tk.LabelFrame(self.conf_frame) 
-        self.wave_frame.grid(row=0, column=0, columnspan=2, padx=5, sticky="nsew")
-        self.editor = WaveformEditor(self.wave_frame,x/1000.0,y)
-        self.wave_frame.grid_propagate(False)
-        self.fit_var = tk.IntVar()
-        self.fit_tau = ttk.Checkbutton(self.conf_frame, text=r"Fit confinement time", variable=self.fit_var)
-        self.fit_tau.grid(row=1, column=0, columnspan=2, pady=5, sticky="nsew")
 
         self.diffusion_frame = tk.LabelFrame(self.guide_tab, text="Reservoir diffusion inputs")
         self.diffusion_frame.grid(row=4, column=0, columnspan=2, pady=5, sticky="nsew")
@@ -275,18 +285,57 @@ class DartGUI:
         self.frac_lfs_entry.grid(row=1, column=1, sticky="w")
         self.frac_lfs_entry.insert(0, "0.12")
         
-        # Run buttons
-        self.shotrun_button = ttk.Button(self.guide_tab, text="Run", command=self.run_shot, style="success.TButton")
-        style = ttk.Style()
-        style.configure("success.TButton", font=("Arial", 12, "bold"), background="#28a745", foreground="white")
-        self.shotrun_button.grid(row=6, column=0, columnspan=2, pady=5, sticky="nsew")
-        self.shotreplot_button = tk.Button(self.guide_tab, text="Replot", command=self.plot_shot)
-        self.shotreplot_button.grid(row=7, column=0, columnspan=2, pady=5, sticky="nsew")
-        self.shotreplot_button.grid_forget()  # Hide it initially
-        self.shotprogress_bar = ttk.Progressbar(self.guide_tab, orient="horizontal", length=100, mode="determinate")
-        self.shotprogress_bar.grid(row=8,column=0,columnspan=2, pady=5, sticky="nsew")
+        self.pumping_frame = tk.LabelFrame(self.guide_tab, text="Pumping setup")
+        self.pumping_frame.grid(row=6, column=0, columnspan=2, pady=5, sticky="nsew")
+        # Pumping
+        tk.Label(self.pumping_frame, text="Lower cryopump:").grid(row=0, column=0, sticky='w')
+        self.cryo = tk.IntVar(value=1)
+        self.cryo_checkbox = ttk.Checkbutton(self.pumping_frame, variable=self.cryo)
+        self.cryo_checkbox.grid(row=0, column=1, sticky="nsew")
 
-       
+        tk.Label(self.pumping_frame, text="Cryo pumpspeed:").grid(row=1, column=0, sticky='w')
+        self.cryo_pumpspeed_entry = tk.Entry(self.pumping_frame, width=30)
+        self.cryo_pumpspeed_entry.grid(row=1, column=1, sticky="w")
+        self.cryo_pumpspeed_entry.insert(0, "10.0")
+
+        tk.Label(self.pumping_frame, text="Turbopump:").grid(row=2, column=0, sticky='w')
+        self.turbo = tk.IntVar(value=1)
+        self.turbo_checkbox = ttk.Checkbutton(self.pumping_frame, variable=self.turbo)
+        self.turbo_checkbox.grid(row=2, column=1, sticky="nsew")
+        tk.Label(self.pumping_frame, text="Recycling fraction:").grid(row=3, column=0, sticky='w')
+        self.turbo_recycling_entry = tk.Entry(self.pumping_frame, width=30)
+        self.turbo_recycling_entry.grid(row=3, column=1, sticky="w")
+        self.turbo_recycling_entry.insert(0, "0.98955")
+        # Plasma particle confinement input
+        x = np.array([0.015, 0.3, 0.9])*1000
+        y = np.array([0.005]*len(x))*1000
+        self.conf_frame = tk.LabelFrame(self.guide_tab_outer, text="Reservoir plasma particle confinement")
+        self.conf_frame.pack(fill="x", padx=10, pady=5)
+        self.wave_frame =tk.LabelFrame(self.conf_frame) 
+        self.wave_frame.grid(row=0, column=0, columnspan=2, padx=5, sticky="nsew")
+        self.editor = WaveformEditor(self.wave_frame,x/1000.0,y)
+        self.wave_frame.grid_propagate(False)
+        self.fit_var = tk.IntVar()
+        self.fit_tau = ttk.Checkbutton(self.conf_frame, text=r"Fit confinement time", variable=self.fit_var)
+        self.fit_tau.grid(row=1, column=0, columnspan=2, pady=5, sticky="nsew")
+
+        # EDIT GAS TRACES
+        self.use_gaswaveform_var = tk.IntVar(value=0)
+        self.editgas_button = ttk.Button(self.guide_tab_outer, text="Change gas waveforms", command=self.open_gas_editor)
+        self.usegas_checkbox = ttk.Checkbutton(self.guide_tab_outer, text="Use edited waveforms", variable=self.use_gaswaveform_var)
+
+        # Run button
+        self.shotrun_button = ttk.Button(self.guide_tab_outer, text="Run", command=self.run_shot, style="success.TButton")
+        self.shotrun_button.pack(pady=5, fill="x", padx=10)
+
+        # Replot button (initially hidden)
+        self.shotreplot_button = tk.Button(self.guide_tab_outer, text="Replot", command=self.plot_shot)
+        self.shotreplot_button.pack(pady=5, fill="x", padx=10)
+        self.shotreplot_button.pack_forget()
+
+        # Progress bar
+        self.shotprogress_bar = ttk.Progressbar(self.guide_tab_outer, orient="horizontal", length=100, mode="determinate")
+        self.shotprogress_bar.pack(pady=5, fill="x", padx=10)       
         # AIM display        
         # JETTO input
         self.jetto_var = tk.IntVar()
@@ -389,6 +438,148 @@ class DartGUI:
         toolbar.update()
         toolbar.grid(row=1, column=0,sticky="nsew")
         self.canvas_useful.get_tk_widget().grid()
+    def load_waveform(self):
+        key = self.selected_waveform.get()
+
+        # Save currently viewed waveform before switching
+        if self.current_key is not None:
+            self.edited_traces[self.current_key] = {
+                'time': self.current_x.copy(),
+                'flow': self.current_y.copy()
+            }
+
+        # Load new waveform from edited version if available, else from original
+        self.current_key = key
+        if key in self.edited_traces:
+            self.current_x = self.edited_traces[key]['time'].copy()
+            self.current_y = self.edited_traces[key]['flow'].copy()
+        else:
+            self.current_x = np.array(self.dart.gastraces['time'][key])
+            self.current_y = np.array(self.dart.gastraces['flow'][key])
+
+        self.update_waveform_plot()
+    def update_waveform_plot(self):
+        self.ax.clear()
+        self.ax.plot(self.current_x, self.current_y)
+        self.ax.set_title(f"{self.current_key} waveform")
+        self.ax.set_xlabel("Time (s)")
+        self.ax.set_ylabel("Flow")
+        self.ax.legend()
+        self.fig.tight_layout()
+        self.canvas.draw()
+
+    def apply_x_change(self):
+        try:
+            val = float(self.x_scale_entry.get())
+        except ValueError:
+            messagebox.showerror("Error", "Invalid numeric value for X edit.")
+            return
+
+        if self.mode.get() == "scale":
+            self.current_x *= val
+        elif self.mode.get() == "adjust":
+            self.current_x += val
+        self.update_waveform_plot()
+
+    def apply_y_change(self):
+        try:
+            val = float(self.y_scale_entry.get())
+        except ValueError:
+            messagebox.showerror("Error", "Invalid numeric value for Y edit.")
+            return
+
+        if self.mode.get() == "scale":
+            self.current_y *= val
+        elif self.mode.get() == "adjust":
+            self.current_y += val
+        self.update_waveform_plot()
+    def reset_current_waveform(self):
+        if self.current_key is None:
+            return
+        self.current_x = np.array(self.original_gastraces['time'][self.current_key])
+        self.current_y = np.array(self.original_gastraces['flow'][self.current_key])
+        self.update_waveform_plot()
+    def save_and_close_waveform_editor(self):
+        # Save currently selected trace first
+        if self.current_key is not None:
+            self.edited_traces[self.current_key] = {
+                'time': self.current_x.copy(),
+                'flow': self.current_y.copy()
+            }
+
+        # Apply all edited traces to dart.gastraces
+        for key, trace in self.edited_traces.items():
+            self.dart.gastraces['time'][key] = trace['time']
+            self.dart.gastraces['flow'][key] = trace['flow']
+
+        self.gas_editor_window.destroy()
+    def open_gas_editor(self):
+        if not hasattr(self, "dart") or not hasattr(self.dart, "gastraces"):
+            messagebox.showerror("Error", "No gas traces available. Please run a shot first.")
+            return
+
+        self.gas_editor_window = tk.Toplevel(self.root)
+        self.gas_editor_window.title("Edit Gas Waveforms")
+        self.gas_editor_window.geometry("950x600")
+        self.gas_editor_window.configure(padx=10, pady=10)
+
+        # ─── Top: Waveform Selector ────────────────────────────────
+        top_frame = tk.Frame(self.gas_editor_window)
+        top_frame.pack(fill="x", pady=(0, 10))
+
+        tk.Label(top_frame, text="Select waveform:", font=("Arial", 10, "bold")).pack(side="left", padx=(0, 5))
+        self.waveform_keys = list(self.dart.gastraces['flow'].keys())
+        self.selected_waveform = tk.StringVar(value=self.waveform_keys[0])
+        dropdown = ttk.Combobox(top_frame, textvariable=self.selected_waveform, values=self.waveform_keys, state="readonly", width=20)
+        dropdown.pack(side="left")
+        dropdown.bind("<<ComboboxSelected>>", lambda e: self.load_waveform())
+
+        # ─── Main Content: Plot + Controls ─────────────────────────
+        main_frame = tk.Frame(self.gas_editor_window)
+        main_frame.pack(fill="both", expand=True)
+
+        # ─── Plot Area (left) ──────────────────────────────────────
+        self.fig, self.ax = plt.subplots(figsize=(5.5, 4.5), dpi=100)
+        self.canvas = FigureCanvasTkAgg(self.fig, master=main_frame)
+        self.canvas.get_tk_widget().pack(side="left", fill="both", expand=True, padx=(0, 10), pady=5)
+
+        # ─── Control Panel (right) ─────────────────────────────────
+        control_panel = tk.Frame(main_frame)
+        control_panel.pack(side="right", fill="y", padx=5, pady=5)
+
+        # Mode toggle
+        mode_frame = tk.LabelFrame(control_panel, text="Edit Mode", padx=5, pady=5)
+        mode_frame.pack(fill="x", pady=5)
+        self.mode = tk.StringVar(value="scale")
+        ttk.Radiobutton(mode_frame, text="Scale", variable=self.mode, value="scale").pack(anchor="w")
+        ttk.Radiobutton(mode_frame, text="Adjust", variable=self.mode, value="adjust").pack(anchor="w")
+
+        # X Editing
+        x_frame = tk.LabelFrame(control_panel, text="X (Time) Edit", padx=5, pady=5)
+        x_frame.pack(fill="x", pady=5)
+        tk.Label(x_frame, text="Value:").pack(anchor="w")
+        self.x_scale_entry = tk.Entry(x_frame, width=10)
+        self.x_scale_entry.pack(fill="x", pady=2)
+        ttk.Button(x_frame, text="Apply X Edit", command=self.apply_x_change).pack(fill="x", pady=(5, 0))
+
+        # Y Editing
+        y_frame = tk.LabelFrame(control_panel, text="Y (Flow) Edit", padx=5, pady=5)
+        y_frame.pack(fill="x", pady=5)
+        tk.Label(y_frame, text="Value:").pack(anchor="w")
+        self.y_scale_entry = tk.Entry(y_frame, width=10)
+        self.y_scale_entry.pack(fill="x", pady=2)
+        ttk.Button(y_frame, text="Apply Y Edit", command=self.apply_y_change).pack(fill="x", pady=(5, 0))
+        ttk.Button(control_panel, text="Reset Current Trace", command=self.reset_current_waveform).pack(fill="x", pady=(0, 10))
+
+        # Save & close
+        ttk.Button(control_panel, text="Save and Close", command=self.save_and_close_waveform_editor).pack(fill="x", pady=10)
+
+        # Load initial waveform
+        self.current_key = None
+        self.original_gastraces = copy.deepcopy(self.dart.gastraces)
+        self.edited_traces = {}  # Stores edited versions of each trace
+
+        self.load_waveform()
     def change_theme(self,theme_name):
         try:
             self.style.theme_use(theme_name)
@@ -418,7 +609,10 @@ class DartGUI:
                 "div2sub": self.div2sub_entry.get(),
                 "frac_div": self.frac_div_entry.get(),
                 "frac_lfs": self.frac_lfs_entry.get(),
-                "cryo": self.cryo.get()
+                "cryo": self.cryo.get(),
+                "turbo": self.turbo.get(),
+                "recycling": self.turbo_recycling_entry.get(),
+                "Spump": self.cryo_pumpspeed_entry.get()
             },
             "aim":{
                 "jetto_var": self.jetto_var.get(),
@@ -499,6 +693,14 @@ class DartGUI:
         self.frac_lfs_entry.insert(0, guide.get("frac_lfs", "0.12"))
 
         self.cryo.set(guide.get("cryo", 1))
+        try:
+            self.turbo.set(guide.get("turbo", 1))
+            self.turbo_recycling_entry.delete(0, tk.END)
+            self.turbo_recycling_entry.insert(0,guide.get("recycling", "0.98955"))
+            self.cryo_pumpspeed_entry.delete(0, tk.END)
+            self.cryo_pumpspeed_entry.insert(0,guide.get("Spump", "10"))
+        except Exception as e:
+            print("Old save file, skipping recycling and pumping speed")
         messagebox.showinfo("Load Session", f"Inputs loaded from:\n{filepath}")
         self.guide_tab.update_idletasks()
         self.aim_tab.update_idletasks()
@@ -626,6 +828,10 @@ class DartGUI:
                                 device=self.device_selected_option.get(),                                
                                 progress_bar=self.shotprogress_bar,
                                 root=self.root)
+        if hasattr(self, 'dart'):
+            gastraces = self.dart.gastraces
+        else:
+            gastraces = None
         self.dart = dart()
         self.dart.time = plasma_details.time
         self.dart.Ip   = plasma_details.Ip
@@ -650,7 +856,8 @@ class DartGUI:
                 'LPFR': 1 if self.pfr_gas_var.get() == 'N' else 0,
                 'UPFR': 1 if self.pfr_gas_var.get() == 'N' else 0
              }
-
+        self.dart.inputgas = bool(self.use_gaswaveform_var.get())
+        self.dart.gastraces = gastraces
         self.dart.shot = int(self.shot_entry.get())
         self.dart.dens = plasma_details.dens
         self.dart.Rt   = plasma_details.Rt
@@ -673,9 +880,13 @@ class DartGUI:
         pconftime          = interp1d(self.dart.conftime,self.dart.conf,bounds_error=False, fill_value=0.0)
         self.dart.plasma_conf = pconftime(self.dart.time)
         if self.cryo.get():
-            self.dart.Spump = 10.0
+            self.dart.Spump = float(self.cryo_pumpspeed_entry.get())
         else:
-            self.dart.Spump = 0.0                
+            self.dart.Spump = 0.0
+        if self.turbo.get():
+            self.dart.recycling = float(self.turbo_recycling_entry.get())
+        else:
+            self.dart.recycling = 0.0            
         self.dart.Twall = 300.0
         self.dart.r_fit     = plasma_details.r_fit
         self.dart.te_fit    = plasma_details.te_fit
@@ -685,10 +896,12 @@ class DartGUI:
         self.editor.x = np.array(self.dart.conftime)
         self.editor.y = np.array(self.dart.conf)*1000.0
         self.editor.update_plot()
+        self.editgas_button.pack(pady=5, fill="x", padx=10, side="left")
+        self.usegas_checkbox.pack(pady=5, fill="x", padx=10, side="left")
         self.root.update_idletasks()  # Refresh GUI
 
-        self.plot_shot()
-        self.shotreplot_button.grid(row=7, column=0, columnspan=2, pady=5, sticky="nsew")
+        self.plot_shot()        
+        self.shotreplot_button.pack(pady=5, fill="x", padx=10)
         self.shotprogress_bar["value"] = 100.0
         self.root.update_idletasks()  # Refresh GUI
     def run_simulation(self):
@@ -732,7 +945,8 @@ class DartGUI:
         self.dart.Rt, self.dart.Spump, self.dart.Twall, self.dart.dp = float(self.machine_entries["Target Radius [m]"].get()), float(self.machine_entries["Pump Speed [m^3/s]"].get()), float(self.machine_entries["Wall Temperature [K]"].get()), float(self.machine_entries["Div/sub DP"].get())            
         self.dart.run(progress_bar=self.progress_bar,root=self.root)
         self.plot_simulation()
-        self.replot_button.grid(row=6, column=0, columnspan=2, pady=5, sticky="nsew")
+        self.shotreplot_button.pack(pady=5, fill="x", padx=10)
+
     def plot_simulation(self):
         self.dart.display(canvas=self.canvas_standard)
         self.dart.display_condensed(canvas=self.canvas_condensed)

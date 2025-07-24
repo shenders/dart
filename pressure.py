@@ -51,8 +51,9 @@ def fit_confinement_time(tdens, dens, shot, initial_knots, initial_tau_guess, **
 
 class pressure:
     def __init__(self,shot,plasma_conf=None,plasma_conftime=None,closure_time=2.0,subdiv_time=0.5,
-                 plasma=True,cryo=False,turbo=True,drsep=None,volume=None,voltime=None,dt=0.0005,track=True,
-                 drseptime=None,gasvolts=False,valve='all',gas_matrix=None,plasma_fracs=[0.1,0.12,0.77,0.01,0.0]):
+                 plasma=True,cryo=False,lower_S_subdiv=10.0,upper_S_subdiv=0.0,turbo=True,drsep=None,volume=None,voltime=None,dt=0.0003,track=True,
+                 recycling=0.98955,drseptime=None,gasvolts=False,valve='all',gas_matrix=None,
+                 plasma_fracs=[0.1,0.12,0.77,0.01,0.0],inputgas=False,gastraces=None):
         self.dt = dt
         self.loaded = False
         self.turbo = turbo
@@ -60,7 +61,11 @@ class pressure:
         self.nspecies   = len(self.species_list)
         self.loaded = False
         self.turbo  = turbo
-        self.cryo   = cryo       
+        self.recycling = recycling
+        self.cryo   = cryo
+        self.lower_S_subdiv = lower_S_subdiv
+        self.upper_S_subdiv = upper_S_subdiv
+        self.gastraces = gastraces
         self.plasmaplot  = plasma
         if plasma:
             diverted     = [0   ,0.0   ,0.000,0.000 ,1.0   ,1.0   ,1.0   ,1.0   ,1.0   ,1.0   ,1.0   ,0.0]
@@ -88,7 +93,7 @@ class pressure:
         self.setup_arrays()
         self.setup_times(closure_time=closure_time,subdiv_time=subdiv_time,plasma_fracs=plasma_fracs)
         self.setup_pumping()
-        self.setup_influx(shot,gasvolts=gasvolts,valve=valve,gas_matrix=gas_matrix)
+        self.setup_influx(shot,gasvolts=gasvolts,valve=valve,gas_matrix=gas_matrix,inputgas=inputgas)
         if track:
             self.track_particles()
 
@@ -117,6 +122,7 @@ class pressure:
         self.plasma_hfs_frac   = plasma_fracs[2]
         self.plasma_pfr_frac   = plasma_fracs[3]
         self.plasma_wall_frac  = plasma_fracs[4]
+        [0.1,0.12,0.77,0.01,0.0]
         # Setup plasma recycling fractions for limited plasma
         self.limiter_div_frac   = 0.0
         self.limiter_lfs_frac   = 0.25
@@ -125,27 +131,23 @@ class pressure:
         self.limiter_wall_frac  = 0.1
     def setup_pumping(self):
         self.f_wall_hit = 25.0
-        if self.turbo:
-            self.recycling = 0.98955
-        else:
+        if not self.turbo:
             self.recycling = 0.0
-        if self.cryo:
-            self.lower_S_subdiv = 10.0
-            self.upper_S_subdiv = 0.0
-        else:
+        if not self.cryo:
             self.lower_S_subdiv = 0.0
             self.upper_S_subdiv = 0.0
-    def calc_Ndot(self,trace,shot,pipe_length,plenum_pressure_bar, calc_piezo,valve):
+    def calc_Ndot(self,trace,shot,pipe_length,plenum_pressure_bar, calc_piezo,valve,mul=None):
         data = client.get(trace, shot)
         time = np.array(data.time.data)
-        if valve == '':
-            mul = 1e21
-        else:
-            mul = 1.0
+        if mul is None:
+            if valve == '':
+                mul = 1e21
+            else:
+                mul = 1.0
         Ndot = calc_piezo.simulate_gas_flow_with_pipe_delay(np.array(data.data)*mul,plenum_pressure_bar,
                                                             pipe_length,6.0,1e-7,time[1]-time[0],valve)
-        return time,Ndot
-    def setup_influx(self,shot,gasvolts=False,valve=None,gas_matrix=None):
+        return time,Ndot,
+    def setup_influx(self,shot,gasvolts=False,valve=None,gas_matrix=None,userinput=None,inputgas=False):
         calc_piezo = piezo()
         
         if gasvolts:
@@ -211,35 +213,58 @@ class pressure:
                 time_UPFR, Ndot = self.calc_Ndot('/xdc/gas/f/'+key, shot, pipe_length, plenum_ldvs, calc_piezo, key)
                 Ndot_UPFR += mul * Ndot 
         else:
-            time_HFS,Ndot_HFS = self.calc_Ndot('/xdc/flow/s/hfs_mid_flow', shot, 0.3, 1.5, calc_piezo,'')        
+            if not inputgas or self.gastraces is None:          
+                time_HFS,Ndot_HFS = self.calc_Ndot('/xdc/flow/s/hfs_mid_flow', shot, 0.3, 1.5, calc_piezo,'')        
+                time_LFS,Ndot_lfsv_bot = self.calc_Ndot('/xdc/flow/s/lfsv_bot_flow', shot, 0.3, 1.5, calc_piezo,'')        
+                time_LFS,Ndot_lfsv_top = self.calc_Ndot('/xdc/flow/s/lfsv_top_flow', shot, 0.3, 1.5, calc_piezo,'')        
+                Ndot_LFS = (Ndot_lfsv_bot + Ndot_lfsv_top)
 
-            time_LFS,Ndot_lfsv_bot = self.calc_Ndot('/xdc/flow/s/lfsv_bot_flow', shot, 0.3, 1.5, calc_piezo,'')        
-            time_LFS,Ndot_lfsv_top = self.calc_Ndot('/xdc/flow/s/lfsv_top_flow', shot, 0.3, 1.5, calc_piezo,'')        
-            Ndot_LFS = (Ndot_lfsv_bot + Ndot_lfsv_top)
+                time_LDV,Ndot_LDV = self.calc_Ndot('/xdc/flow/s/lfsd_bot_flow', shot, 0.6, 1.5, calc_piezo,'')
+                time_UDV,Ndot_UDV = self.calc_Ndot('/xdc/flow/s/lfsd_top_flow', shot, 0.6, 1.5, calc_piezo,'')
 
-            time_LDV,Ndot_LDV = self.calc_Ndot('/xdc/flow/s/lfsd_bot_flow', shot, 0.6, 1.5, calc_piezo,'')
-            time_UDV,Ndot_UDV = self.calc_Ndot('/xdc/flow/s/lfsd_top_flow', shot, 0.6, 1.5, calc_piezo,'')
+                time_LDVS,Ndot_LDVS = self.calc_Ndot('/xdc/flow/s/lfss_bot_flow', shot, 0.6, 1.5, calc_piezo,'')
+                time_UDVS,Ndot_UDVS = self.calc_Ndot('/xdc/flow/s/lfss_top_flow', shot, 0.6, 1.5, calc_piezo,'')
 
-            time_LDVS,Ndot_LDVS = self.calc_Ndot('/xdc/flow/s/lfss_bot_flow', shot, 0.6, 1.5, calc_piezo,'')
-            time_UDVS,Ndot_UDVS = self.calc_Ndot('/xdc/flow/s/lfss_top_flow', shot, 0.6, 1.5, calc_piezo,'')
-
-            time_UPFR,Ndot_pfrt01 = self.calc_Ndot('/xdc/flow/s/pfr_top_t01', shot, 0.6, 1.5, calc_piezo,'')
-            time_UPFR,Ndot_pfrt05 = self.calc_Ndot('/xdc/flow/s/pfr_top_t05', shot, 0.6, 1.5, calc_piezo,'')
-            Ndot_UPFR = (Ndot_pfrt01 + Ndot_pfrt05)
-            
-            time_LPFR,Ndot_pfrb01 = self.calc_Ndot('/xdc/flow/s/pfr_bot_b01', shot, 0.6, 1.5, calc_piezo,'')
-            time_LPFR,Ndot_pfrb05 = self.calc_Ndot('/xdc/flow/s/pfr_bot_b05', shot, 0.6, 1.5, calc_piezo,'')
-            Ndot_LPFR = (Ndot_pfrb01 + Ndot_pfrb05)
+                time_UPFR,Ndot_pfrt01 = self.calc_Ndot('/xdc/flow/s/pfr_top_t01', shot, 0.6, 1.5, calc_piezo,'')
+                time_UPFR,Ndot_pfrt05 = self.calc_Ndot('/xdc/flow/s/pfr_top_t05', shot, 0.6, 1.5, calc_piezo,'')
+                Ndot_UPFR = (Ndot_pfrt01 + Ndot_pfrt05)
+               
+                time_LPFR,Ndot_pfrb01 = self.calc_Ndot('/xdc/flow/s/pfr_bot_b01', shot, 0.6, 1.5, calc_piezo,'')
+                time_LPFR,Ndot_pfrb05 = self.calc_Ndot('/xdc/flow/s/pfr_bot_b05', shot, 0.6, 1.5, calc_piezo,'')
+                Ndot_LPFR = (Ndot_pfrb01 + Ndot_pfrb05)
+                self.gastraces={
+                    'flow':{
+                        'HFS':Ndot_HFS,
+                        'LFS':Ndot_LFS,
+                        'UDV':Ndot_UDV,
+                        'LDV':Ndot_LDV,
+                        'UDVS':Ndot_UDVS,
+                        'LDVS':Ndot_LDVS,
+                        'UPFR':Ndot_UPFR,
+                        'LPFR':Ndot_LPFR,
+                        },
+                    'time':{
+                        'HFS':time_HFS,
+                        'LFS':time_LFS,
+                        'UDV':time_UDV,
+                        'LDV':time_LDV,
+                        'UDVS':time_UDVS,
+                        'LDVS':time_LDVS,
+                        'UPFR':time_UPFR,
+                        'LPFR':time_LPFR,
+                        }
+                    }
+                        
 
            
-        hfs_Gamma_interp        = interp1d(time_HFS, Ndot_HFS, bounds_error=False, fill_value=0.0)
-        lfs_Gamma_interp        = interp1d(time_LFS, Ndot_LFS, bounds_error=False, fill_value=0.0)
-        udv_Gamma_interp        = interp1d(time_UDV, Ndot_UDV, bounds_error=False, fill_value=0.0)
-        ldv_Gamma_interp        = interp1d(time_LDV, Ndot_LDV, bounds_error=False, fill_value=0.0)
-        udvs_Gamma_interp       = interp1d(time_UDVS, Ndot_UDVS, bounds_error=False, fill_value=0.0)
-        ldvs_Gamma_interp       = interp1d(time_LDVS, Ndot_LDVS, bounds_error=False, fill_value=0.0)
-        upfr_Gamma_interp       = interp1d(time_UPFR, Ndot_UPFR, bounds_error=False, fill_value=0.0)
-        lpfr_Gamma_interp       = interp1d(time_LPFR, Ndot_LPFR, bounds_error=False, fill_value=0.0)
+        hfs_Gamma_interp        = interp1d(self.gastraces['time']['HFS'], self.gastraces['flow']['HFS'], bounds_error=False, fill_value=0.0)
+        lfs_Gamma_interp        = interp1d(self.gastraces['time']['LFS'], self.gastraces['flow']['LFS'], bounds_error=False, fill_value=0.0)
+        udv_Gamma_interp        = interp1d(self.gastraces['time']['UDV'], self.gastraces['flow']['UDV'], bounds_error=False, fill_value=0.0)
+        ldv_Gamma_interp        = interp1d(self.gastraces['time']['LDV'], self.gastraces['flow']['LDV'], bounds_error=False, fill_value=0.0)
+        udvs_Gamma_interp       = interp1d(self.gastraces['time']['UDVS'], self.gastraces['flow']['UDVS'], bounds_error=False, fill_value=0.0)
+        ldvs_Gamma_interp       = interp1d(self.gastraces['time']['LDVS'], self.gastraces['flow']['LDVS'], bounds_error=False, fill_value=0.0)
+        upfr_Gamma_interp       = interp1d(self.gastraces['time']['UPFR'], self.gastraces['flow']['UPFR'], bounds_error=False, fill_value=0.0)
+        lpfr_Gamma_interp       = interp1d(self.gastraces['time']['LPFR'], self.gastraces['flow']['LPFR'], bounds_error=False, fill_value=0.0)
         if gas_matrix is None:
             gas_matrix              = {'HFS':0,
                                        'LFS':0,
@@ -320,8 +345,8 @@ class pressure:
         return reservoirs
     
     def track_particles(self):
-        upper_balance               = [0.0   , 0.1   ,0.2     ,0.3   ,0.4    ,0.57 , 0.6   ,0.7  , 0.8   , 0.9  , 1.0 ]
-        drsep_balance               = [-0.07 , -0.02 , -0.015 ,-0.01 ,-0.005 ,0.002 , 0.005 ,0.01 , 0.015 , 0.02 , 0.07]
+        upper_balance               = [0.0    , 0.1   ,0.2    ,0.3     ,0.4      , 0.5   , 0.6  , 0.7  , 0.8   , 1.0 ]
+        drsep_balance               = [-0.015 ,-0.01  ,-0.007 , -0.002 , -0.0015 , 0.000 , 0.005 , 0.007 , 0.01,0.015 ]
         updown_balance              = interp1d(drsep_balance, upper_balance, bounds_error=False, fill_value=0.0)
         reservoirs                  = {'HFS':np.zeros(self.nspecies),
                                        'LFS':np.zeros(self.nspecies),
@@ -372,7 +397,7 @@ class pressure:
             # Diffuse particles from LFS into the lower divertor. Different conductance for forward and reverse
             reservoirs = self.evolve_reservoirs(dt,reservoirs,'LFS','LDV',V_LFS,V_div,self.k_leak_lfs_div,k_leak_div_lfs)
             # If plasma does not exist, diffusive transport between HFS and LFS, and HFS and divertor
-            if self.plasma_conf(t) == 0:
+            if self.plasma_conf(t) < 5e-5:
                 # Diffuse particles from HFS into the upper pfr
                 reservoirs = self.evolve_reservoirs(dt,reservoirs,'HFS','UPR',V_HFS,V_PFR,self.k_leak_hfs_pfr,self.k_leak_hfs_pfr)
                 # Diffuse particles from HFS into the lower pfr
@@ -640,8 +665,8 @@ class pressure:
             plt.show()
 
 if __name__ == "__main__":
-    plasma = True
-    reservoir_plot=False    
+    plasma = False
+    reservoir_plot=True    
     valve  = 'lfsv_bot_l03'
     calfac = 1.0
     if plasma:
@@ -719,19 +744,35 @@ if __name__ == "__main__":
     p0_subuppdiv  = np.array(FIG_p0_uppdiv.data)
     p0_main       = np.array(FIG_p0_main.data)
     time_press    = np.array(FIG_p0_lowdiv.time.data)
+    def compute_toroidal_volume(R, Z):
+        R = np.array(R)
+        Z = np.array(Z)
+        area = 0.5 * np.abs(np.dot(R, np.roll(Z, 1)) - np.dot(Z, np.roll(R, 1)))
+        R_avg = np.mean(R)
+        volume = 2 * np.pi * R_avg * area
+        return volume
     if reservoir_plot:
         fig, axes = plt.subplots(nrows=1, ncols=1, figsize=(6, 6))
         fig.subplots_adjust(hspace=0.09,left=0.1,top=0.95, bottom=0.15,right=0.96)
         fs = 12
-
-        axes.fill([0.27,0.49,0.7,0.7,0.49,0.27,0.27],[-1.3,-1.5,-1.5,1.5,1.5,1.3,-1.3],label='HFS',alpha=0.6,edgecolor='black')
-        axes.fill([0.49,0.7, 0.87,0.49],[-1.5,-1.5,-1.87,-1.5],label='LPFR',alpha=0.6,edgecolor='black')
-        axes.fill([0.49,0.7, 0.87,0.49],[1.5,1.5,1.87,1.5],label='UPFR',alpha=0.6,edgecolor='black')
-        axes.fill([0.7,0.87,2.0,2.0,0.87,0.7,0.7],[-1.5,-1.5,-0.25,0.25,1.5,1.5,-1.5],label='LFS',alpha=0.6,edgecolor='black')
-        axes.fill([0.7,0.87,0.87,1.75,1.75,1.35,1.1,0.87,0.7],[-1.5,-1.5,-1.58,-1.58,-1.7,-2.1,-2.1,-1.87,-1.5],label='Lower divertor',alpha=0.6,edgecolor='black')
-        axes.fill([0.7,0.87,0.87,1.75,1.75,1.35,1.1,0.87,0.7],[1.5,1.5,1.58,1.58,1.7,2.1,2.1,1.87,1.5],label='Upper divertor',alpha=0.6,edgecolor='black')
-        axes.fill([1.75,2.0,2.0,1.75,1.75],[1.58,1.58,2.1,2.1,1.58],alpha=0.6,label='Upper sub-divertor',edgecolor='black')
-        axes.fill([1.75,2.0,2.0,1.75,1.75],[-1.58,-1.58,-2.1,-2.1,-1.58],alpha=0.6,label='Lower sub-divertor',edgecolor='black')
+        hfsx,hfsy = np.array([0.32,0.6, 0.6,0.32,0.32]),np.array([-1.31,-1.31,1.31,1.31,-1.31])
+        lfsx,lfsy = np.array([0.6,0.83,1.2,2.0,2.0,1.2,0.83,0.6,0.6]),np.array([-1.31,-1.44,-1.02,-1.02,1.02,1.02,1.44,1.31,-1.31])
+        pfrx,pfry = np.array([0.32,0.6, 0.8,0.32]),np.array([1.31,1.31,1.8,1.31])
+        divx,divy = np.array([0.6,0.83,0.87,1.75,1.75,1.35,1.1,0.8,0.6]),np.array([1.31,1.44,1.58,1.55,1.7,2.1,2.1,1.8,1.31])
+        sdvx,sdvy = np.array([1.75,2.0,2.0,1.75,1.75]),np.array([1.55,1.55,2.1,2.1,1.55])
+        print("HFS volume:",compute_toroidal_volume(hfsx,hfsy))
+        print("LFS volume:",compute_toroidal_volume(lfsx,lfsy))
+        print("PFR volume:",compute_toroidal_volume(pfrx,pfry))
+        print("DIV volume:",compute_toroidal_volume(divx,divy))
+        print("SDV volume:",compute_toroidal_volume(sdvx,sdvy))
+        axes.fill(hfsx,hfsy,label='HFS',alpha=0.6,edgecolor='black')
+        axes.fill(pfrx,-pfry,label='LPFR',alpha=0.6,edgecolor='black')
+        axes.fill(pfrx,pfry,label='UPFR',alpha=0.6,edgecolor='black')
+        axes.fill(lfsx,lfsy,label='LFS',alpha=0.6,edgecolor='black')
+        axes.fill(divx,-divy,label='Lower div',alpha=0.6,edgecolor='black')
+        axes.fill(divx,divy,label='Upper div',alpha=0.6,edgecolor='black')
+        axes.fill(sdvx,-sdvy,alpha=0.6,label='Lower sub-div',edgecolor='black')
+        axes.fill(sdvx,sdvy,alpha=0.6,label='Upper sub-div',edgecolor='black')
 
         axes.fill([1.98,2.2,2.2,1.98,1.98],[-0.02,-0.02,0.02,0.02,-0.02],alpha=0.6,edgecolor='black',color='black')
         axes.fill([1.98,2.2,2.2,1.98,1.98],[-1.9,-1.9,-1.86,-1.86,-1.9],alpha=0.6,edgecolor='black',color='black')
@@ -743,11 +784,14 @@ if __name__ == "__main__":
         axes.set_ylim([-2.2,2.2])
         axes.set_aspect(aspect=1.0)
 
-        axes.text(2.02,0.05,'Main \nFIG',fontsize=fs)
-        axes.text(2.02,-1.82,'Sub-divertor \nFIG',fontsize=fs)
+        axes.text(2.02,0.05,'Main chamber\nFIG',fontsize=fs-1)
+        axes.text(2.02,-1.82,'Lower divertor\nFIG',fontsize=fs-1)
+        axes.text(2.02,1.6,'Upper divertor\nFIG',fontsize=fs-1)
         
         plt.tight_layout()
-        plt.savefig("mast_u_regions_highres.png", dpi=300,transparent=True)
+        plt.savefig("fig1.png", dpi=300,transparent=True)
+        plt.savefig("fig1.eps", dpi=300,transparent=True)
+        plt.savefig("fig1.pdf", dpi=300,transparent=True)
         plt.show()
         exit()        
     run = pressure(shot, plasma_conf=plasma_conf, plasma_conftime=plasma_conftime,

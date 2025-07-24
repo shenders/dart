@@ -125,8 +125,12 @@ class dart:
             cryo = True
         else:
             cryo = False
-        fdiv   = [0.7   , 0.65   ,0.55     ,0.45   ,0.35 ,0.3 , 0.35   ,0.45  , 0.55   , 0.65  , 7.0 ]
-        drsep  = [-0.07 , -0.02 , -0.015 ,-0.01 ,-0.005 ,0.0 , 0.005 ,0.01 , 0.015 , 0.02 , 0.07]
+        if self.recycling > 0:
+            turbo = True
+        else:
+            turbo = False
+        fdiv   = [0.99   ,0.9    ,0.7    , 0.65   , 0.45    , 0.35  ,0.30 , 0.25    ,0.2   , 0.15  , 0.0 ]
+        drsep  = [-0.015 ,-0.01  ,-0.007 , -0.002 , -0.0015 , 0.000 ,0.0025 , 0.005 ,0.007 , 0.010 , 0.015 ]
         fdiv_int  = interp1d(drsep,fdiv,kind='linear',fill_value='extrapolate')
         self.fdiv = fdiv_int(self.drsep)
         if self.fitconf:
@@ -134,17 +138,20 @@ class dart:
             print("Initial values:",self.conftime,self.conf)
             fit_result = fit_confinement_time(self.time, self.dens, self.shot,
                                               self.conftime, self.conf,                                             
-                                              cryo=cryo,closure_time=self.closure,
+                                              cryo=cryo,turbo=turbo,closure_time=self.closure,
                                               plasma_fracs = self.plasma_fracs,
                                               drsep=self.drsep,drseptime=self.time,
-                                              gas_matrix=self.gas_matrix,subdiv_time=self.div2sub)
+                                              gas_matrix=self.gas_matrix,subdiv_time=self.div2sub,
+                                              lower_S_subdiv=self.Spump,recycling=self.recycling,
+                                              inputgas=self.inputgas,gastraces=self.gastraces)
             print("Fitted values:",fit_result.x)
             self.conftime = self.conftime
             self.conf     = fit_result.x
             pconftime     = interp1d(self.conftime,self.conf,bounds_error=False, fill_value=0.0)
             self.plasma_conf = pconftime(self.time)
-        p0        = pressure(self.shot,plasma_conf=self.plasma_conf,plasma_conftime=self.time,cryo=cryo,closure_time=self.closure,
-                             plasma_fracs = self.plasma_fracs,drsep=self.drsep,drseptime=self.time,gas_matrix=self.gas_matrix,subdiv_time=self.div2sub)
+        p0        = pressure(self.shot,plasma_conf=self.plasma_conf,plasma_conftime=self.time,lower_S_subdiv=self.Spump,recycling=self.recycling,turbo=turbo,cryo=cryo,closure_time=self.closure,
+                             plasma_fracs = self.plasma_fracs,drsep=self.drsep,drseptime=self.time,gas_matrix=self.gas_matrix,subdiv_time=self.div2sub,
+                             inputgas=self.inputgas,gastraces=self.gastraces)
         useratio1 = True
         if useratio1:
             ratio = np.divide((p0.lowdiv_pressure[:,1]/7.0),(p0.lowdiv_pressure[:,0]+p0.lowdiv_pressure[:,0]/7.0),out=np.full_like(p0.lowdiv_pressure[:,1],np.nan),
@@ -161,11 +168,13 @@ class dart:
         subdivpres = interp1d(p0.t_array,p0.sublowdiv_pressure[:,0]+FIG_N2_fac*p0.sublowdiv_pressure[:,1],kind='linear',fill_value='extrapolate')
         usubdivpres = interp1d(p0.t_array,p0.subuppdiv_pressure[:,0]+FIG_N2_fac*p0.subuppdiv_pressure[:,1],kind='linear',fill_value='extrapolate')
         midpress = interp1d(p0.t_array,p0.main_pressure[:,0]+FIG_N2_fac*p0.main_pressure[:,1],kind='linear',fill_value='extrapolate')
+        self.gastraces = p0.gastraces
         self.cz = concz(self.time)
         self.imp = 'N'
         self.p0 = ldivpres(self.time)
         self.p0midpred = midpress(self.time)
         self.p0uppred = usubdivpres(self.time)
+        self.p0uppred2 = udivpres(self.time)
         self.avrp0 = (ldivpres(self.time)+udivpres(self.time))
         pred_dens = interp1d(p0.t_array,p0.electron_density[:,0],kind='linear',fill_value='extrapolate')
         self.pred_dens = pred_dens(self.time)                     
@@ -183,9 +192,14 @@ class dart:
         # Eich multi-machine empirical regression #14 and #9
         self.lq = 0.63e-3 * self.Bp**(-1.19) * 1.8
         fpow  = self.fdiv_rad(self.cz,self.p0)
+        
         self.qpar  = self.pqpar(self.Psep,fpow, self.lq, self.Bp)
-        self.nsep = self.pnsep(self.qpar, self.zeff, self.alft, self.lc, self.avrp0)
-        self.Tsep = self.ptsep(self.zeff,self.qpar,self.lc)
+        self.qd    = 3.0 * ((self.Psep/1e6) * self.fdiv/self.Rt) * (2e-3/self.lq) * (12.0/self.lx)**(0.043) * (self.p0 * (300.0/self.Twall) * (1.0 + self.fz * self.cz))**(-1.0)
+        td         = 10**((np.log10(self.qd) + 0.11) / 0.54)
+        self.nsep  = self.pnsep(self.qpar, self.zeff, self.alft, self.lc, self.avrp0)
+        self.Tsep  = self.ptsep(self.zeff,self.qpar,self.lc)
+        fx         = self.Rt/self.Ru
+        self.nsep2 = self.pnsep2(self.qpar,td,self.Tsep,self.avrp0,fx)
         # Compare to experimental separatrix conditions
         self.nsep_exp = np.zeros(len(self.time))
         for i,t in enumerate(self.time):
@@ -194,8 +208,6 @@ class dart:
             n_inter = interp1d(self.r_fit,self.ne_fit[i,:],kind='linear',fill_value='extrapolate')
             self.nsep_exp[i] = n_inter(r_sep)
             
-        self.qd = 3.0 * ((self.Psep/1e6) * self.fdiv/self.Rt) * (2e-3/self.lq) * (12.0/self.lx)**(0.043) * (self.p0 * (300.0/self.Twall) * (1.0 + self.fz * self.cz))**(-1.0)
-        td      = 10**((np.log10(self.qd) + 0.11) / 0.54)
         self.tilt= 0.0
         self.qperp = self.pqperp(td,self.Tsep,self.nsep, self.alft)
                 
@@ -207,16 +219,27 @@ class dart:
         self.fs = 16
         def_col = ['black','#E41A1C' ,'#0072B2', '#D95F02', '#4DAF4A', '#377EB8', '#A65628']
         self.plot_output(axes,0,0,self.time,self.Psep/self.R0/1e6,label=r'P$_{sep}$/R$_0$',loc='upper right',ncol=1,col=def_col[0],ytitle='MW/m,MA')
-        self.plot_output(axes,0,0,self.time,self.Ip/1e6,ylim=[0,4],label=f'Plasma current',loc='upper right',ncol=1,col=def_col[1],ytitle='MW/m,MA')
-        self.plot_output(axes,1,0,self.time,self.cz,alpha=0.6,label=self.imp+' conc.',loc='upper right',ncol=1,col=def_col[0],ytitle='')
-        self.plot_output(axes,1,0,self.time,self.p0,ylim=[0,2.5],label=r'Lower div. p$_D$',loc='upper right',ncol=1,col=def_col[2],ytitle='Pa')
-        self.plot_output(axes,2,0,self.time,self.IRt2,ylim=[0,3],label=r'Peak IR heat load',col=def_col[0],xtitle='Time [s]',ytitle='MWm$^{-2}$')
+        self.plot_output(axes,0,0,self.time,self.Ip/1e6,ylim=[0,6],label=f'Plasma current',loc='upper right',ncol=1,col=def_col[2],ytitle='MW/m,MA')
+        if (self.cz > 0).any():
+            self.plot_output(axes,1,0,self.time,self.cz,alpha=0.6,label=self.imp+' conc.',loc='upper right',ncol=1,col=def_col[1],ytitle='')
+        self.plot_output(axes,1,0,self.time,self.p0,ylim=[0,0.6],label=r'Lower div. p$_D$',loc='upper right',ncol=1,col=def_col[0],ytitle='Pa')
+        self.plot_output(axes,2,0,self.time,self.IRt2,ylim=[0,3],label=r'Peak IR exp.',col=def_col[0],xtitle='Time [s]',ytitle='MWm$^{-2}$')
         self.plot_output(axes,2,0,self.time,self.IRt5,ylim=[0,1.5],label=r'',col=def_col[0],xtitle='Time [s]',ytitle='MWm$^{-2}$') 
-        self.plot_output(axes,2,0,self.time,self.qperp,ylim=[0,1.5],label=r'Predicted',col=def_col[1],xtitle='Time [s]',ytitle='MWm$^{-2}$') 
-        self.plot_output(axes,0,1,self.time,self.Tsep,ylim=[0,60],label=r'T$_{e,u}$',col=def_col[3],xtitle='Time [s]',ytitle=r'eV')
-        #self.plot_output(axes,1,1,self.time,self.nsep_exp/1e19,ylim=[0,2.0],label=r'n$_{e,u}^{exp}$',ls='',alpha=0.6,psym='o',mfc=def_col[1],mec='black')
-        self.plot_output(axes,1,1,self.time,self.nsep/1e19,ylim=[0,2.0],label=r'n$_{e,u}$',col=def_col[2],xtitle='Time [s]',ytitle=r'1e19 m$^{-3}$')
-        self.plot_output(axes,2,1,self.time,self.qd,ylim=[0,10],col=def_col[0],xtitle='Time [s]',label=r'q$_{det}$',loc='upper right',ncol=1,ytitle=r'')
+        self.plot_output(axes,2,0,self.time,self.qperp,ylim=[0,3],label=r'DART pred.',col=def_col[1],xtitle='Time [s]',ytitle='MWm$^{-2}$') 
+        try:
+            import pandas as pd
+            df=pd.read_csv(f'Tesep/{self.shot}_sep_data.csv')
+            self.plot_output(axes,0,1,df['time (s)'], df['Tesep (eV)'],label='T$_{e,u}$ exp.',col=def_col[0],ls='',psym='o',xtitle='Time [s]',ytitle=r'eV')
+        except:
+            print("No exp. Te,sep available")
+        self.plot_output(axes,0,1,self.time,self.Tsep,ylim=[0,60],label=r'DART pred.',col=def_col[1],xtitle='Time [s]',ytitle=r'eV')
+        try:
+            self.plot_output(axes,1,1,df['time (s)'], df['nesep (m-3)']/1e19,label='n$_{e,u}$ exp.',ls='',psym='o',col=def_col[0],xtitle='Time [s]',ytitle=r'eV')
+        except:
+            print("No exp. ne,sep available")
+        self.plot_output(axes,1,1,self.time,self.nsep/1e19,ylim=[0,2.0],label=r'Kallenbach',col=def_col[1],xtitle='Time [s]',ytitle=r'1e19 m$^{-3}$')
+        self.plot_output(axes,1,1,self.time,self.nsep2/1e19,ylim=[0,2.0],label=r'Henderson',col=def_col[2],xtitle='Time [s]',ytitle=r'1e19 m$^{-3}$')
+        self.plot_output(axes,2,1,self.time,self.qd,ylim=[0,10],col=def_col[1],xtitle='Time [s]',label=r'DART q$_{det}$',loc='upper right',ncol=1,ytitle=r'')
         self.plot_output(axes,2,1,[-100,100],[1,1],ylim=[0,8],col=def_col[0],ls='--',xtitle='Time [s]',label=r'Detachment',loc='upper right',ncol=1,ytitle=r'')
         if canvas is None:
             plt.show()
@@ -234,8 +257,15 @@ class dart:
         #self.plot_output(axes,0,0,self.time,self.am,label=r'a$_{min}$',nrows=nrows,loc='upper right',ncol=1,col=def_col[0],ytitle='m')
         #self.plot_output(axes,0,0,self.time,self.R0,ylim=[0,1.2],nrows=nrows,label=f'R$_0$',loc='upper right',ncol=1,col=def_col[1],ytitle='m')
         self.plot_output(axes,0,0,self.time,self.lq*1e3,ylim=[0,15],label=r'1.8x $\lambda_{q,Eich \#14}$',col=def_col[1],xtitle='Time [s]',ytitle='mm')
+        try:
+            import pandas as pd
+            df=pd.read_csv(f'Tesep/{self.shot}_sep_data.csv')
+            self.plot_output(axes,0,0,df['time (s)'], df['lambda_q (m)']*1e3,label='lq$_{u}$ exp.',col=def_col[0],ls='',psym='o',xtitle='Time [s]',ytitle=r'mm')
+        except:
+            print("No experimental lq available")
         self.plot_output(axes,1,0,self.time,self.B0,ylim=[0,1.2],nrows=nrows,label=r'B$_{0}$',col=def_col[2],loc='upper right',xtitle='Time [s]',ytitle=r'T')
         self.plot_output(axes,1,0,self.time,self.Bp,ylim=[0,1.2],nrows=nrows,label=r'B$_{p}$',col=def_col[3],loc='upper right',xtitle='Time [s]',ytitle=r'T')
+        self.plot_output(axes,1,0,self.time,self.fdiv,ylim=[0,1.2],nrows=nrows,label=r'f$_{div}$',col=def_col[1],loc='upper right',xtitle='Time [s]',ytitle=r'T')
         self.plot_output(axes,0,1,self.time,np.degrees(self.alft),nrows=nrows,ylim=[0,10],label=r'Target grazing angle',loc='upper right',col=def_col[0],xtitle='Time [s]',ytitle=r'Degrees')
         self.plot_output(axes,1,1,self.time,self.lc,ylim=[0,20],nrows=nrows,label=r'Connection length',col=def_col[0],loc='upper right',xtitle='Time [s]',ytitle=r'm')
         if canvas is None:
@@ -258,8 +288,10 @@ class dart:
         self.plot_output(axes,1,0,self.time,self.p0midpred*1000.0,ylim=[0,6.0],nrows=nrows,label=r'Pred',col=def_col[1],loc='upper right',xtitle='Time [s]',ytitle=r'mPa')
         self.plot_output(axes,0,1,self.time,self.p0up,ylim=[0,1.5],label=r'FIG HU08',nrows=nrows,col=def_col[0],loc='upper right',xtitle='Time [s]',ytitle=r'Pa')
         self.plot_output(axes,0,1,self.time,self.p0uppred,ylim=[0,1.5],label=r'Pred',nrows=nrows,col=def_col[1],loc='upper right',xtitle='Time [s]',ytitle=r'Pa')
+        self.plot_output(axes,0,1,self.time,self.p0uppred2,ylim=[0,1.5],label=r'Pred div',ls='--',alpha=0.3,nrows=nrows,col=def_col[1],loc='upper right',xtitle='Time [s]',ytitle=r'Pa')
         self.plot_output(axes,1,1,self.time,self.press,ylim=[0,1.5],label=r'FIG HL11',nrows=nrows,loc='upper right',ncol=1,col=def_col[0],ytitle='Pa')
         self.plot_output(axes,1,1,self.time,self.p0sub,ylim=[0,1.5],label=r'Pred',nrows=nrows,loc='upper right',ncol=1,col=def_col[1],ytitle='Pa')
+        self.plot_output(axes,1,1,self.time,self.p0,ylim=[0,1.5],label=r'Pred div',ls='--',alpha=0.3,nrows=nrows,loc='upper right',ncol=1,col=def_col[1],ytitle='Pa')
         if canvas is None:
             plt.show()
         else:
@@ -314,7 +346,7 @@ class dart:
                      (4.0/(2.0))**(7.0/16.0)*((1.0+4)/5.0)**(1.0/8.0))
         
         # Geometric mean
-        lq_values      = [self.lq_14, self.lq_09, self.lq_HDz, self.lq_HD, self.lq_ST]
+        lq_values     = [self.lq_14, self.lq_09, self.lq_HDz, self.lq_HD, self.lq_ST]
         self.lq_mean   = np.zeros_like(self.lq_ST)
         self.lq_error  = np.zeros_like(self.lq_ST)
         for i,t in enumerate(self.time):
@@ -473,6 +505,15 @@ class dart:
                np.sqrt(self.press_to_flux(Tgas=self.Twall) * DP / b_press))
         return fac * (self.kappaz(zeff) / l_c)**(2.0 / 7.0) * np.maximum(np.sin(alf), 0.01)**(-0.5) * qpar**(3.0 / 14.0) * p0**p_exp
 
+    def pnsep2(self,qpar,tdiv,Tu,p0,fx,epsilon=0.0):
+        nt   = (1/fx) * qpar * (mD/2.0)**(0.5) * ec**(-1.5)  / (self.gamma()*tdiv**1.5 + epsilon*tdiv**(0.5))
+        rhoTt,rhont,rhoTu,rhonu = 2.5, 2.0, 2.5,1.8  
+        fac       = 2.0 * rhoTt * rhont / (rhoTu * rhonu)
+        const1    = 0.06
+        const2    = 0.35
+        A = const1 * tdiv**(const2) # Best fit to describe frad/fmom
+        return (fac  * tdiv * nt / Tu) * A
+
     def ptsep(self,zeff, qpar, lc):
     # Function for upstream electron temperature
         fac = (7.0 / 2.0 / self.kappa())**(2.0 / 7.0)
@@ -585,11 +626,11 @@ class dart:
         ax.set_xlim(xlim)
         ax.set_ylim(ylim)
         ax.set_ylabel(ytitle, fontsize=self.fs)
-        if nrows == 3:
-            if i == 0 and j == 0:
-                ax.set_title('Inputs', fontsize=self.fs)
-            if i == 0 and j == 1:
-                ax.set_title('Outputs', fontsize=self.fs)
+##        if nrows == 3:
+##            if i == 0 and j == 0:
+##                ax.set_title('Inputs', fontsize=self.fs)
+##            if i == 0 and j == 1:
+##                ax.set_title('Outputs', fontsize=self.fs)
         if xlog:
             ax.set_xscale('log')
         if ylog:
