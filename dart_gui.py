@@ -898,7 +898,7 @@ class DartGUI:
         self.editor.update_plot()
         self.editgas_button.pack(pady=5, fill="x", padx=10, side="left")
         self.usegas_checkbox.pack(pady=5, fill="x", padx=10, side="left")
-        self.root.update_idletasks()  # Refresh GUI
+        #self.root.update_idletasks()  # Refresh GUI
 
         self.plot_shot()        
         self.shotreplot_button.pack(pady=5, fill="x", padx=10)
