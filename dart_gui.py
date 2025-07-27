@@ -3,6 +3,7 @@ import subprocess
 import json
 import sys
 import copy
+import functools
 
 #if sys.version_info[:2] != (3, 7):
 #    print("⚠️  This script requires Python 3.7 due to outdated tkinter version 8.5. Please run it with Python 3.7.")
@@ -379,7 +380,8 @@ class DartGUI:
             entry.insert(0, self.input_defaults[label])
             entry.grid(row=i, column=1, sticky="nsew")
             self.entries[label] = entry
-        
+        self.edit_table_button = tk.Button(self.manual_frame, text="Edit Table", command=self.open_table_editor)
+        self.edit_table_button.grid(row=len(self.labels), column=0, columnspan=3, pady=5)
         # Machine Details Frame
         self.machine_frame = tk.LabelFrame(self.aim_tab, text="Machine Details")
         self.machine_frame.grid(row=4, column=0, columnspan=6, pady=5, sticky="nsew")
@@ -439,6 +441,109 @@ class DartGUI:
         toolbar.update()
         toolbar.grid(row=1, column=0,sticky="nsew")
         self.canvas_useful.get_tk_widget().grid()
+    def open_table_editor(self):
+        top = tk.Toplevel(self.root)
+        top.title("Edit Input Table")
+        labels = self.labels
+
+        # Parse current data into a 2D list
+        data = []
+        max_len = max(len(self.entries[label].get().split(',')) for label in labels)
+        for i in range(max_len):
+            row = []
+            for label in labels:
+                vals = [v.strip() for v in self.entries[label].get().split(',')]
+                row.append(vals[i] if i < len(vals) else "")
+            data.append(row)
+
+        # Frame for the table
+        table_frame = tk.Frame(top)
+        table_frame.pack(side="top", fill="both", expand=True)
+
+        # Draw header
+        for col, label in enumerate(labels):
+            tk.Label(table_frame, text=label, font=("Arial", 9, "bold")).grid(row=0, column=col, padx=2, pady=2)
+        tk.Label(table_frame, text="").grid(row=0, column=len(labels), padx=2, pady=2)  # Header for delete buttons
+
+        # Store entry widgets
+        entry_grid = []
+
+        def rebuild_table():
+            # Clear all rows except header
+            for widget in table_frame.grid_slaves():
+                if int(widget.grid_info()["row"]) > 0:
+                    widget.destroy()
+            # Redraw all rows
+            for row_idx, entry_row in enumerate(entry_grid):
+                for col_idx, var in enumerate(entry_row[:-2]):
+                    entry = tk.Entry(table_frame, textvariable=var, width=10)
+                    entry.grid(row=row_idx+1, column=col_idx, padx=2, pady=2)
+                # Add "Add Row Before" button
+                add_btn = tk.Button(
+                    table_frame,
+                    text="Add Row Before",
+                    command=functools.partial(add_row_before, row_idx)
+                )
+                add_btn.grid(row=row_idx+1, column=len(labels), padx=2, pady=2)
+                # Add Delete button
+                del_btn = tk.Button(
+                    table_frame,
+                    text="Delete",
+                    command=functools.partial(delete_row, row_idx)
+                )
+                del_btn.grid(row=row_idx+1, column=len(labels)+1, padx=2, pady=2)
+                entry_row[-2] = add_btn  # Update the button reference
+                entry_row[-1] = del_btn  # Update the button reference
+
+        def delete_row(row_idx):
+            entry_grid.pop(row_idx)
+            rebuild_table()
+
+        def add_row_before(row_idx):
+            new_row = [tk.StringVar(value="") for _ in labels]
+            new_row += [None, None]  # Placeholders for buttons
+            entry_grid.insert(row_idx, new_row)
+            rebuild_table()
+
+        # Build initial table
+        for row in data:
+            entry_row = []
+            for val in row:
+                var = tk.StringVar(value=val)
+                entry_row.append(var)
+            entry_row += [None, None]  # Placeholders for add and delete buttons
+            entry_grid.append(entry_row)
+        rebuild_table()  # Draw the table with current data
+
+        def add_row():
+            row_idx = len(entry_grid)
+            entry_row = [tk.StringVar(value="") for _ in labels]
+            entry_row += [None, None]  # Placeholders for add and delete buttons
+            entry_grid.append(entry_row)
+            rebuild_table()
+            top.update_idletasks()
+            top.geometry("")
+
+        def save_and_close():
+            # Collect column-wise data
+            columns = [[] for _ in labels]
+            for row in entry_grid:
+                for col_idx, var in enumerate(row[:-1]):  # skip the last item (button)
+                    val = var.get().strip()
+                    if val != "":
+                        columns[col_idx].append(val)
+            # Update entries
+            for col_idx, label in enumerate(labels):
+                self.entries[label].delete(0, tk.END)
+                self.entries[label].insert(0, ",".join(columns[col_idx]))
+            top.destroy()
+
+        # Frame for buttons
+        button_frame = tk.Frame(top)
+        button_frame.pack(side="bottom", fill="x", pady=5)
+        tk.Button(button_frame, text="Add Row", command=add_row).pack(side="left", padx=5)
+        tk.Button(button_frame, text="Save", command=save_and_close).pack(side="left", padx=5)
+
     def load_waveform(self):
         key = self.selected_waveform.get()
 
