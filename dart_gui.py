@@ -4,9 +4,9 @@ import json
 import sys
 import copy
 
-if sys.version_info[:2] != (3, 7):
-    print("⚠️  This script requires Python 3.7 due to outdated tkinter version 8.5. Please run it with Python 3.7.")
-    sys.exit(1)
+#if sys.version_info[:2] != (3, 7):
+#    print("⚠️  This script requires Python 3.7 due to outdated tkinter version 8.5. Please run it with Python 3.7.")
+#    sys.exit(1)
 try:
     import ttkbootstrap as ttk
 except ImportError:
@@ -32,7 +32,8 @@ class CustomToolbar(NavigationToolbar2Tk):
         for button in self.winfo_children():
             if isinstance(button, tk.Button):
                 if "forward" in button.cget("text").lower() or "back" in button.cget("text").lower():
-                    button.destroy()
+                    #button.destroy()
+                    button.config(state="disabled")
     def set_message(self, s):
         """Override this method to prevent x, y coordinates from displaying."""
         pass  # Do nothing instead of displaying coordinates
