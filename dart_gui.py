@@ -528,7 +528,7 @@ class DartGUI:
             # Collect column-wise data
             columns = [[] for _ in labels]
             for row in entry_grid:
-                for col_idx, var in enumerate(row[:-1]):  # skip the last item (button)
+                for col_idx, var in enumerate(row[:-2]):  # skip the last item (button)
                     val = var.get().strip()
                     if val != "":
                         columns[col_idx].append(val)
