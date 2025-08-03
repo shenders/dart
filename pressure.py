@@ -5,17 +5,17 @@ from scipy.signal import convolve
 from pipeinjector import piezo
 from scipy.optimize import minimize
 
-import pyuda
-client = pyuda.Client()
 # Constants
 kB       = 1.38e-23         # Boltzmann constant [J/K] 
 T_pump   = 300.0            # Temperature at pump [K]
-V_machine= 29.77             # Effective volume 26.6 m^3
-V_PFR    = 0.16
-V_HFS    = 3.57
-V_LFS    = 17.5
-V_div    = 2.66
-V_sdiv   = 1.51
+V_machine= 50.0             # Effective volume 50.0 m^3
+V_PFR    = 0.21
+V_HFS    = 2.0
+V_LFS    = 21.85
+V_SLF    = 4.51
+V_div    = 2.88
+V_sdiv   = 3.03
+V_ssdv   = 2.49
 A        = kB * T_pump      # Pre-factor in pressure equation
 
 def fit_confinement_time(tdens, dens, shot, initial_knots, initial_tau_guess, **kwargs):
@@ -54,6 +54,9 @@ class pressure:
                  plasma=True,cryo=False,lower_S_subdiv=10.0,upper_S_subdiv=0.0,turbo=True,drsep=None,volume=None,voltime=None,dt=0.0003,track=True,
                  recycling=0.98955,drseptime=None,gasvolts=False,valve='all',gas_matrix=None,
                  plasma_fracs=[0.1,0.12,0.77,0.01,0.0],inputgas=False,gastraces=None):
+        import pyuda
+        client = pyuda.Client()
+
         self.dt = dt
         self.loaded = False
         self.turbo = turbo
@@ -671,6 +674,9 @@ if __name__ == "__main__":
     calfac = 1.0
     if plasma:
     # Plasma pulse
+        import pyuda
+        client = pyuda.Client()
+
         shot = 51892
         status = client.get('/epm/equilibriumStatusInteger', shot).data
         drsep = client.get('/epm/output/separatrixGeometry/drsepOut', shot).data[status==1]
@@ -737,13 +743,6 @@ if __name__ == "__main__":
         cryo      = False
         plasma_conf=None
         plasma_conftime=None
-    FIG_p0_lowdiv = client.get('/aga/HL11',shot)
-    FIG_p0_uppdiv = client.get('/aga/HU08',shot)
-    FIG_p0_main   = client.get('/aga/HM12',shot)
-    p0_sublowdiv  = np.array(FIG_p0_lowdiv.data)
-    p0_subuppdiv  = np.array(FIG_p0_uppdiv.data)
-    p0_main       = np.array(FIG_p0_main.data)
-    time_press    = np.array(FIG_p0_lowdiv.time.data)
     def compute_toroidal_volume(R, Z):
         R = np.array(R)
         Z = np.array(Z)
@@ -757,22 +756,39 @@ if __name__ == "__main__":
         fs = 12
         hfsx,hfsy = np.array([0.32,0.6, 0.6,0.32,0.32]),np.array([-1.31,-1.31,1.31,1.31,-1.31])
         lfsx,lfsy = np.array([0.6,0.83,1.2,2.0,2.0,1.2,0.83,0.6,0.6]),np.array([-1.31,-1.44,-1.02,-1.02,1.02,1.02,1.44,1.31,-1.31])
+        slfx,slfy = np.array([0.83,1.2,2.0,2.0,0.87,0.83]),np.array([-1.44,-1.02,-1.02,-1.55,-1.58,-1.44])
         pfrx,pfry = np.array([0.32,0.6, 0.8,0.32]),np.array([1.31,1.31,1.8,1.31])
         divx,divy = np.array([0.6,0.83,0.87,1.75,1.75,1.35,1.1,0.8,0.6]),np.array([1.31,1.44,1.58,1.55,1.7,2.1,2.1,1.8,1.31])
-        sdvx,sdvy = np.array([1.75,2.0,2.0,1.75,1.75]),np.array([1.55,1.55,2.1,2.1,1.55])
+        sdvx,sdvy = np.array([1.75,2.0,2.0,1.35,1.35,1.75,1.75]),np.array([1.55,1.55,2.2,2.2,2.1,1.7,1.55])
+        ssdx,ssdy = np.array([1.35,1.35,0.32,0.32,1.1,1.35]),np.array([2.1,2.2,2.2,1.31,2.1,2.1])
+
         print("HFS volume:",compute_toroidal_volume(hfsx,hfsy))
         print("LFS volume:",compute_toroidal_volume(lfsx,lfsy))
+        print("SLF volume:",compute_toroidal_volume(slfx,slfy))
         print("PFR volume:",compute_toroidal_volume(pfrx,pfry))
         print("DIV volume:",compute_toroidal_volume(divx,divy))
         print("SDV volume:",compute_toroidal_volume(sdvx,sdvy))
+        print("SSD volume:",compute_toroidal_volume(ssdx,ssdy))
+        print("Total volume:",compute_toroidal_volume(hfsx,hfsy)+\
+                compute_toroidal_volume(lfsx,lfsy) + \
+                compute_toroidal_volume(slfx,slfy)*2 + \
+                compute_toroidal_volume(pfrx,pfry) + \
+                compute_toroidal_volume(divx,divy)*2 + \
+                compute_toroidal_volume(ssdx,ssdy)*2 + \
+                compute_toroidal_volume(sdvx,sdvy)*2)
+        
         axes.fill(hfsx,hfsy,label='HFS',alpha=0.6,edgecolor='black')
         axes.fill(pfrx,-pfry,label='LPFR',alpha=0.6,edgecolor='black')
         axes.fill(pfrx,pfry,label='UPFR',alpha=0.6,edgecolor='black')
         axes.fill(lfsx,lfsy,label='LFS',alpha=0.6,edgecolor='black')
+        axes.fill(slfx,slfy,label='LFS-lower',alpha=0.6,edgecolor='black')
+        axes.fill(slfx,-slfy,label='LFS-upper',alpha=0.6,edgecolor='black')
         axes.fill(divx,-divy,label='Lower div',alpha=0.6,edgecolor='black')
         axes.fill(divx,divy,label='Upper div',alpha=0.6,edgecolor='black')
         axes.fill(sdvx,-sdvy,alpha=0.6,label='Lower sub-div',edgecolor='black')
         axes.fill(sdvx,sdvy,alpha=0.6,label='Upper sub-div',edgecolor='black')
+        axes.fill(ssdx,ssdy,alpha=0.6,label='Upper sub-sub-div',edgecolor='black')
+        axes.fill(ssdx,-ssdy,alpha=0.6,label='Lower sub-sub-div',edgecolor='black')
 
         axes.fill([1.98,2.2,2.2,1.98,1.98],[-0.02,-0.02,0.02,0.02,-0.02],alpha=0.6,edgecolor='black',color='black')
         axes.fill([1.98,2.2,2.2,1.98,1.98],[-1.9,-1.9,-1.86,-1.86,-1.9],alpha=0.6,edgecolor='black',color='black')
@@ -794,6 +810,15 @@ if __name__ == "__main__":
         plt.savefig("fig1.pdf", dpi=300,transparent=True)
         plt.show()
         exit()        
+
+
+    FIG_p0_lowdiv = client.get('/aga/HL11',shot)
+    FIG_p0_uppdiv = client.get('/aga/HU08',shot)
+    FIG_p0_main   = client.get('/aga/HM12',shot)
+    p0_sublowdiv  = np.array(FIG_p0_lowdiv.data)
+    p0_subuppdiv  = np.array(FIG_p0_uppdiv.data)
+    p0_main       = np.array(FIG_p0_main.data)
+    time_press    = np.array(FIG_p0_lowdiv.time.data)
     run = pressure(shot, plasma_conf=plasma_conf, plasma_conftime=plasma_conftime,
                    cryo=cryo, turbo=turbo, plasma=True, drsep=drsep,
                    drseptime=drseptime, valve=valve, gasvolts=gasvolts)
