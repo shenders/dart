@@ -4,6 +4,7 @@ from scipy.interpolate import interp1d
 import matplotlib.cm as cm
 import string
 import math
+from matplotlib.patches import Rectangle
 
 # Plasma constants
 mu0   = 1.2566e-6
@@ -11,6 +12,12 @@ kB    = 1.38e-23
 mD    = 1.67e-27 * 2
 ec    = 1.602e-19
 labels= iter(string.ascii_lowercase)
+def white_axes_background(ax):
+    ax.add_patch(Rectangle((0,0), 1, 1,
+                           transform=ax.transAxes,
+                           facecolor='white', edgecolor='none',
+                           zorder=-1))
+
 class dart:
     def __init__(self,jetto=None):
         self.loaded=False        
@@ -53,9 +60,9 @@ class dart:
             self.Paux=np.concatenate([self.Paux,np.array(f['PAUX'][:])])
             self.Prad=np.concatenate([self.Prad,np.array(f['PRAD'][:])])
             self.B0time=np.concatenate([self.B0time,np.array(f['BGEO'][:])])
-            self.kptime=np.concatenate([self.B0time,np.array(f['K95'][:])])
-            self.amtime=np.concatenate([self.B0time,np.array(f['AMIN'][:])])
-            self.R0time=np.concatenate([self.B0time,np.array(f['RGEO'][:])])
+            self.kptime=np.concatenate([self.kptime,np.array(f['K95'][:])])
+            self.amtime=np.concatenate([self.amtime,np.array(f['AMIN'][:])])
+            self.R0time=np.concatenate([self.R0time,np.array(f['RGEO'][:])])
         # Plasma current
         Ip_vals   = np.array([2.0e6 , 20.0e6 , 21.0e6 ])
         alft_vals = np.radians(np.array([0.5   , 4.0    , 4.0]))
@@ -119,39 +126,67 @@ class dart:
                 else:
                     self.lc[i] = self.kp[i] * np.pi * self.am[i] * self.B0[i] / self.Bp[i]
         self.lx = self.lc/2.0
+    def power_sharing(self,flfs=0.9,flot=0.8,fhot=0.5):
+        offset = 0 # Offset from drsep=0 mm due to drifts
+        drsep = self.drsep-offset
+        fdisc = 1 - np.exp(-(np.abs(drsep)) / (self.lq/2.0))
+        plfs = flfs 
+        phfs = (1 - flfs) 
+        plit = fdisc * plfs
+        plet = (1 - fdisc) * plfs
+        phit = fdisc * phfs
+        phet = (1 - fdisc) * phfs
+        ppou = 0.5 * plet + flot * plit + fhot * phit
+        ppin = 0.5 * phet + (1 - flot) * plit + (1 - fhot) * phit
+        id0 = np.where(drsep <= 0)[0]
+        id1 = np.where(drsep > 0)[0]
+        lo  = np.zeros_like(drsep)
+        li  = np.zeros_like(drsep)
+        uo  = np.zeros_like(drsep)
+        ui  = np.zeros_like(drsep)
+        lo[id0] = ppou[id0]
+        li[id0] = ppin[id0]
+        uo[id0] = 0.5 * plet[id0]  
+        ui[id0] = 0.5 * phet[id0]  
+        lo[id1] = 0.5 * plet[id1]  
+        li[id1] = 0.5 * phet[id1]  
+        uo[id1] = ppou[id1]
+        ui[id1] = ppin[id1]
+        self.fdiv = lo
+
     def runGUIDE(self):
         from pressure import pressure, fit_confinement_time
         if self.Spump > 0:
             cryo = True
         else:
             cryo = False
+        if self.nbi_S > 0:
+            nbipump = True
+        else:
+            nbipump = False
         if self.recycling > 0:
             turbo = True
         else:
             turbo = False
-        fdiv   = [0.99   ,0.9    ,0.7    , 0.65   , 0.45    , 0.35  ,0.30 , 0.25    ,0.2   , 0.15  , 0.0 ]
-        drsep  = [-0.015 ,-0.01  ,-0.007 , -0.002 , -0.0015 , 0.000 ,0.0025 , 0.005 ,0.007 , 0.010 , 0.015 ]
-        fdiv_int  = interp1d(drsep,fdiv,kind='linear',fill_value='extrapolate')
-        self.fdiv = fdiv_int(self.drsep)
         if self.fitconf:
             print("Fitting confinement time...")
             print("Initial values:",self.conftime,self.conf)
             fit_result = fit_confinement_time(self.time, self.dens, self.shot,
                                               self.conftime, self.conf,                                             
-                                              cryo=cryo,turbo=turbo,closure_time=self.closure,
-                                              plasma_fracs = self.plasma_fracs,
+                                              cryo=cryo,nbipump=nbipump,turbo=turbo,closure_time=self.closure,
                                               drsep=self.drsep,drseptime=self.time,
                                               gas_matrix=self.gas_matrix,subdiv_time=self.div2sub,
-                                              lower_S_subdiv=self.Spump,recycling=self.recycling,
+                                              lower_S_subdiv=self.Spump,nbi_S=self.nbi_S,f_wall_hit=self.collision,recycling=self.recycling,
                                               inputgas=self.inputgas,gastraces=self.gastraces)
             print("Fitted values:",fit_result.x)
             self.conftime = self.conftime
             self.conf     = fit_result.x
             pconftime     = interp1d(self.conftime,self.conf,bounds_error=False, fill_value=0.0)
             self.plasma_conf = pconftime(self.time)
-        p0        = pressure(self.shot,plasma_conf=self.plasma_conf,plasma_conftime=self.time,lower_S_subdiv=self.Spump,recycling=self.recycling,turbo=turbo,cryo=cryo,closure_time=self.closure,
-                             plasma_fracs = self.plasma_fracs,drsep=self.drsep,drseptime=self.time,gas_matrix=self.gas_matrix,subdiv_time=self.div2sub,
+        p0        = pressure(self.shot,plasma_conf=self.plasma_conf,plasma_conftime=self.time,lower_S_subdiv=self.Spump,f_wall_hit=self.collision,recycling=self.recycling,turbo=turbo,cryo=cryo,closure_time=self.closure,
+                             nbipump=nbipump,nbi_S=self.nbi_S,drsep=self.drsep,drseptime=self.time,gas_matrix=self.gas_matrix,subdiv_time=self.div2sub,
                              inputgas=self.inputgas,gastraces=self.gastraces)
+        self.reservoir_output = p0
         useratio1 = True
         if useratio1:
             ratio = np.divide((p0.lowdiv_pressure[:,1]/7.0),(p0.lowdiv_pressure[:,0]+p0.lowdiv_pressure[:,0]/7.0),out=np.full_like(p0.lowdiv_pressure[:,1],np.nan),
@@ -190,16 +225,20 @@ class dart:
         self.qcylin()
         self.conn_length(facSXD=1.5)
         # Eich multi-machine empirical regression #14 and #9
+        # Eich multi-machine empirical regression #14 and #9
+        lmb_func = interp1d([-100.0e-3,-5.0e-3,0.0,5.0e-3,100.0e-3],[1.0,1.0,2.0,1.0,1.0],fill_value='extrapolate')
         self.lq = 0.63e-3 * self.Bp**(-1.19) * 1.8
-        fpow  = self.fdiv_rad(self.cz,self.p0)
-        
+        self.power_sharing()
+#        fpow  = self.fdiv_rad(self.cz,self.p0)
+        self.fwall = 1.0-1.0/np.exp(1)
+        fpow       = self.fdiv * self.fwall
         self.qpar  = self.pqpar(self.Psep,fpow, self.lq, self.Bp)
-        self.qd    = 3.0 * ((self.Psep/1e6) * self.fdiv/self.Rt) * (2e-3/self.lq) * (12.0/self.lx)**(0.043) * (self.p0 * (300.0/self.Twall) * (1.0 + self.fz * self.cz))**(-1.0)
-        td         = 10**((np.log10(self.qd) + 0.11) / 0.54)
+        self.qd    = 3.0 * ((self.Psep/1e6) * fpow/self.Rt) * (2e-3/self.lq) * (12.0/self.lx)**(0.043) * (self.p0 * (300.0/self.Twall) * (1.0 + self.fz * self.cz))**(-1.0)
+        self.td    = 10**((np.log10(self.qd) + 0.11) / 0.54)
         self.nsep  = self.pnsep(self.qpar, self.zeff, self.alft, self.lc, self.avrp0)
         self.Tsep  = self.ptsep(self.zeff,self.qpar,self.lc)
         fx         = self.Rt/self.Ru
-        self.nsep2 = self.pnsep2(self.qpar,td,self.Tsep,self.avrp0,fx)
+        self.nsep2 = self.pnsep2(self.qpar,self.td,self.Tsep,self.avrp0,fx)
         # Compare to experimental separatrix conditions
         self.nsep_exp = np.zeros(len(self.time))
         for i,t in enumerate(self.time):
@@ -209,38 +248,46 @@ class dart:
             self.nsep_exp[i] = n_inter(r_sep)
             
         self.tilt= 0.0
-        self.qperp = self.pqperp(td,self.Tsep,self.nsep, self.alft)
-                
+        self.qperp = self.pqperp(self.td,self.Tsep,self.nsep, self.alft)
+        if self.writefile:
+            outfile = self.dartfile
+            np.savez(self.dartfile, time=self.time, qdet=self.qd, pdiv=self.p0,psubdiv=self.p0sub,qperp=self.qperp,tdiv=self.td)
+            print(f"Data written to {outfile}")                
     def plot_GUIDE(self,canvas=None):
         plt.rcParams['font.family'] = 'serif'  # Choose font family
         plt.rcParams['font.serif'] = ['Arial']  # Specify font
         fig, axes = plt.subplots(nrows=3, ncols=2, sharex=True, figsize=(11, 8))
         fig.subplots_adjust(hspace=0.09,left=0.1,top=0.96, bottom=0.1,right=0.96)
-        self.fs = 16
+        self.fs = 18
         def_col = ['black','#E41A1C' ,'#0072B2', '#D95F02', '#4DAF4A', '#377EB8', '#A65628']
-        self.plot_output(axes,0,0,self.time,self.Psep/self.R0/1e6,label=r'P$_{sep}$/R$_0$',loc='upper right',ncol=1,col=def_col[0],ytitle='MW/m,MA')
-        self.plot_output(axes,0,0,self.time,self.Ip/1e6,ylim=[0,6],label=f'Plasma current',loc='upper right',ncol=1,col=def_col[2],ytitle='MW/m,MA')
+        self.plot_output(axes,0,0,self.time,self.Psep/self.R0/1e6,label=r'P$_{sep}$/R$_0$',loc='upper right',xlim=[0,self.tend],col=def_col[0],ytitle='MW/m,MA')
+        self.plot_output(axes,0,0,self.time,self.Ip/1e6,ylim=[0,6],label=f'Plasma current',loc='upper right',xlim=[0,self.tend],col=def_col[2],ytitle='MW/m,MA')
         if (self.cz > 0).any():
-            self.plot_output(axes,1,0,self.time,self.cz,alpha=0.6,label=self.imp+' conc.',loc='upper right',ncol=1,col=def_col[1],ytitle='')
-        self.plot_output(axes,1,0,self.time,self.p0,ylim=[0,0.6],label=r'Lower div. p$_D$',loc='upper right',ncol=1,col=def_col[0],ytitle='Pa')
-        self.plot_output(axes,2,0,self.time,self.IRt2,ylim=[0,3],label=r'Peak IR exp.',col=def_col[0],xtitle='Time [s]',ytitle='MWm$^{-2}$')
-        self.plot_output(axes,2,0,self.time,self.IRt5,ylim=[0,1.5],label=r'',col=def_col[0],xtitle='Time [s]',ytitle='MWm$^{-2}$') 
-        self.plot_output(axes,2,0,self.time,self.qperp,ylim=[0,3],label=r'DART pred.',col=def_col[1],xtitle='Time [s]',ytitle='MWm$^{-2}$') 
+            self.plot_output(axes,1,0,self.time,self.cz,alpha=0.6,label=self.imp+' conc.',loc='upper right',xlim=[0,self.tend],col=def_col[1],ytitle='')
+        self.plot_output(axes,1,0,self.time,self.p0,ylim=[0,0.6],label=r'DART lower div.',loc='upper right',xlim=[0,self.tend],col=def_col[0],ytitle='Pa')
+        self.plot_output(axes,2,0,self.time,self.IRt2,ylim=[0,3],label=r'IR peak q$_{\perp}$',col=def_col[0],xlim=[0,self.tend],xtitle='Time [s]',ytitle='MWm$^{-2}$')
+        self.plot_output(axes,2,0,self.time,self.IRt5,ylim=[0,1.5],label=r'',col=def_col[0],xtitle='Time [s]',xlim=[0,self.tend],ytitle='MWm$^{-2}$') 
+        self.plot_output(axes,2,0,self.time,self.qperp,ylim=[0,3],label=r'DART',col=def_col[1],xlim=[0,self.tend],xtitle='Time [s]',ytitle='MWm$^{-2}$') 
         try:
-            import pandas as pd
-            df=pd.read_csv(f'Tesep/{self.shot}_sep_data.csv')
-            self.plot_output(axes,0,1,df['time (s)'], df['Tesep (eV)'],label='T$_{e,u}$ exp.',col=def_col[0],ls='',psym='o',xtitle='Time [s]',ytitle=r'eV')
+##            import pandas as pd
+##            df=pd.read_csv(f'Tesep/{self.shot}_sep_data.csv')
+##            self.plot_output(axes,0,1,df['time (s)'], df['Tesep (eV)'],label='T$_{e,u}$ exp.',col=def_col[0],xlim=[0,self.tend],ls='',psym='o',xtitle='Time [s]',ytitle=r'eV')
+            from database import mast_database
+            data = mast_database(self.shot)
+            self.plot_output(axes,0,1,data.time['Tesep'],data.data['Tesep'],label='T$_{e,u}$ exp.',col=def_col[0],xlim=[0,self.tend],xtitle='Time [s]',ytitle=r'eV')
+            axes[0,1].fill_between(data.time['Tesep'], data.data['Tesep'] - data.std['Tesep'], data.data['Tesep'] + data.std['Tesep'], color=def_col[0], alpha=0.2)
         except:
             print("No exp. Te,sep available")
-        self.plot_output(axes,0,1,self.time,self.Tsep,ylim=[0,60],label=r'DART pred.',col=def_col[1],xtitle='Time [s]',ytitle=r'eV')
+        self.plot_output(axes,0,1,self.time,self.Tsep,ylim=[0,60],label=r'DART',col=def_col[1],xlim=[0,self.tend],xtitle='Time [s]',ytitle=r'eV')
         try:
-            self.plot_output(axes,1,1,df['time (s)'], df['nesep (m-3)']/1e19,label='n$_{e,u}$ exp.',ls='',psym='o',col=def_col[0],xtitle='Time [s]',ytitle=r'eV')
+            self.plot_output(axes,1,1,data.time['nesep'],data.data['nesep']/1e19,label='n$_{e,u}$ exp.',xlim=[0,self.tend],col=def_col[0],xtitle='Time [s]')
+            axes[1,1].fill_between(data.time['nesep'], (data.data['nesep'] - data.std['nesep'])/1e19, (data.data['nesep'] + data.std['nesep'])/1e19, color=def_col[0], alpha=0.2)
+            #self.plot_output(axes,1,1,df['time (s)'], df['nesep (m-3)']/1e19,label='n$_{e,u}$ exp.',xlim=[0,self.tend],ls='',psym='o',col=def_col[0],xtitle='Time [s]',ytitle=r'eV')
         except:
             print("No exp. ne,sep available")
-        self.plot_output(axes,1,1,self.time,self.nsep/1e19,ylim=[0,2.0],label=r'Kallenbach',col=def_col[1],xtitle='Time [s]',ytitle=r'1e19 m$^{-3}$')
-        self.plot_output(axes,1,1,self.time,self.nsep2/1e19,ylim=[0,2.0],label=r'Henderson',col=def_col[2],xtitle='Time [s]',ytitle=r'1e19 m$^{-3}$')
-        self.plot_output(axes,2,1,self.time,self.qd,ylim=[0,10],col=def_col[1],xtitle='Time [s]',label=r'DART q$_{det}$',loc='upper right',ncol=1,ytitle=r'')
-        self.plot_output(axes,2,1,[-100,100],[1,1],ylim=[0,8],col=def_col[0],ls='--',xtitle='Time [s]',label=r'Detachment',loc='upper right',ncol=1,ytitle=r'')
+        self.plot_output(axes,1,1,self.time,self.nsep/1e19,ylim=[0,2.0],label=r'DART',xlim=[0,self.tend],col=def_col[1],xtitle='Time [s]',ytitle=r'1e19 m$^{-3}$')
+        self.plot_output(axes,2,1,self.time,self.qd,ylim=[0,10],col=def_col[1],xtitle='Time [s]',xlim=[0,self.tend],label=r'DART q$_{det}$',loc='upper right',ytitle=r'')
+        self.plot_output(axes,2,1,[-100,100],[1,1],ylim=[0,8],col=def_col[0],ls='--',xlim=[0,self.tend],xtitle='Time [s]',label=r'Detachment',loc='upper right',ytitle=r'')
         if canvas is None:
             plt.show()
         else:
@@ -252,22 +299,21 @@ class dart:
         nrows=2
         fig, axes = plt.subplots(nrows=2, ncols=2, sharex=True, figsize=(11, 8))
         fig.subplots_adjust(hspace=0.09,left=0.1,top=0.96, bottom=0.1,right=0.96)
-        self.fs = 16
+        self.fs = 18
         def_col = ['black','#E41A1C' ,'#0072B2', '#D95F02', '#4DAF4A', '#377EB8', '#A65628']
-        #self.plot_output(axes,0,0,self.time,self.am,label=r'a$_{min}$',nrows=nrows,loc='upper right',ncol=1,col=def_col[0],ytitle='m')
-        #self.plot_output(axes,0,0,self.time,self.R0,ylim=[0,1.2],nrows=nrows,label=f'R$_0$',loc='upper right',ncol=1,col=def_col[1],ytitle='m')
-        self.plot_output(axes,0,0,self.time,self.lq*1e3,ylim=[0,15],label=r'1.8x $\lambda_{q,Eich \#14}$',col=def_col[1],xtitle='Time [s]',ytitle='mm')
+        self.plot_output(axes,0,0,self.time,self.lq*1e3,ylim=[0,15],label=r'1.8x $\lambda_{q,Eich \#14}$',xlim=[0,self.tend],col=def_col[1],xtitle='Time [s]',ytitle='mm')
         try:
             import pandas as pd
             df=pd.read_csv(f'Tesep/{self.shot}_sep_data.csv')
-            self.plot_output(axes,0,0,df['time (s)'], df['lambda_q (m)']*1e3,label='lq$_{u}$ exp.',col=def_col[0],ls='',psym='o',xtitle='Time [s]',ytitle=r'mm')
+            self.plot_output(axes,0,0,df['time (s)'], df['lambda_q (m)']*1e3,label='lq$_{u}$ exp.',xlim=[0,self.tend],col=def_col[0],ls='',psym='o',xtitle='Time [s]',ytitle=r'mm')
         except:
             print("No experimental lq available")
-        self.plot_output(axes,1,0,self.time,self.B0,ylim=[0,1.2],nrows=nrows,label=r'B$_{0}$',col=def_col[2],loc='upper right',xtitle='Time [s]',ytitle=r'T')
-        self.plot_output(axes,1,0,self.time,self.Bp,ylim=[0,1.2],nrows=nrows,label=r'B$_{p}$',col=def_col[3],loc='upper right',xtitle='Time [s]',ytitle=r'T')
-        self.plot_output(axes,1,0,self.time,self.fdiv,ylim=[0,1.2],nrows=nrows,label=r'f$_{div}$',col=def_col[1],loc='upper right',xtitle='Time [s]',ytitle=r'T')
-        self.plot_output(axes,0,1,self.time,np.degrees(self.alft),nrows=nrows,ylim=[0,10],label=r'Target grazing angle',loc='upper right',col=def_col[0],xtitle='Time [s]',ytitle=r'Degrees')
-        self.plot_output(axes,1,1,self.time,self.lc,ylim=[0,20],nrows=nrows,label=r'Connection length',col=def_col[0],loc='upper right',xtitle='Time [s]',ytitle=r'm')
+        self.plot_output(axes,1,0,self.time,self.B0,ylim=[0,1.2],nrows=nrows,label=r'B$_{0}$',xlim=[0,self.tend],col=def_col[2],loc='upper right',xtitle='Time [s]',ytitle=r'T')
+        self.plot_output(axes,1,0,self.time,self.Bp,ylim=[0,1.2],nrows=nrows,label=r'B$_{p}$',xlim=[0,self.tend],col=def_col[3],loc='upper right',xtitle='Time [s]',ytitle=r'T')
+        self.plot_output(axes,1,0,self.time,self.fdiv,ylim=[0,1.2],nrows=nrows,label=r'f$_{div}$',xlim=[0,self.tend],col=def_col[1],loc='upper right',xtitle='Time [s]',ytitle=r'T')
+        self.plot_output(axes,0,1,self.time,np.degrees(self.alft),nrows=nrows,ylim=[0,10],xlim=[0,self.tend],label=r'Target grazing angle',loc='upper right',col=def_col[0],xtitle='Time [s]',ytitle=r'Degrees')
+        self.plot_output(axes,1,1,self.time,self.lc,ylim=[0,20],nrows=nrows,label=r'Connection length',xlim=[0,self.tend],col=def_col[0],loc='upper right',xtitle='Time [s]',ytitle=r'm,eV')
+        self.plot_output(axes,1,1,self.time,self.td,ylim=[0,20],nrows=nrows,label=r'T$_{e,div}$',xlim=[0,self.tend],col=def_col[1],loc='upper right',xtitle='Time [s]',ytitle=r'm,eV')
         if canvas is None:
             plt.show()
         else:
@@ -280,24 +326,55 @@ class dart:
 
         fig, axes = plt.subplots(nrows=2, ncols=2, sharex=True, figsize=(11, 8))
         fig.subplots_adjust(hspace=0.09,left=0.1,top=0.96, bottom=0.1,right=0.96)
-        self.fs = 16
+        fig.patch.set_facecolor('none')     # transparent outside the axes
+        self.fs = 18
         def_col = ['black','#E41A1C' ,'#0072B2', '#D95F02', '#4DAF4A', '#377EB8', '#A65628']
-        self.plot_output(axes,0,0,self.time,self.dens/1e19,ylim=[0,9],nrows=nrows,label=r'Line averaged density',col=def_col[0],loc='upper right',xtitle='Time [s]',ytitle=r'm')
-        self.plot_output(axes,0,0,self.time,self.pred_dens/1e19,ylim=[0,9],nrows=nrows,label=r'Pred',col=def_col[1],loc='upper right',xtitle='Time [s]',ytitle=r'm')
-        self.plot_output(axes,1,0,self.time,self.p0mid*1000.0,ylim=[0,6.0],nrows=nrows,label=r'FIG HM12',col=def_col[0],loc='upper right',xtitle='Time [s]',ytitle=r'mPa')
-        self.plot_output(axes,1,0,self.time,self.p0midpred*1000.0,ylim=[0,6.0],nrows=nrows,label=r'Pred',col=def_col[1],loc='upper right',xtitle='Time [s]',ytitle=r'mPa')
-        self.plot_output(axes,0,1,self.time,self.p0up,ylim=[0,1.5],label=r'FIG HU08',nrows=nrows,col=def_col[0],loc='upper right',xtitle='Time [s]',ytitle=r'Pa')
-        self.plot_output(axes,0,1,self.time,self.p0uppred,ylim=[0,1.5],label=r'Pred',nrows=nrows,col=def_col[1],loc='upper right',xtitle='Time [s]',ytitle=r'Pa')
-        self.plot_output(axes,0,1,self.time,self.p0uppred2,ylim=[0,1.5],label=r'Pred div',ls='--',alpha=0.3,nrows=nrows,col=def_col[1],loc='upper right',xtitle='Time [s]',ytitle=r'Pa')
-        self.plot_output(axes,1,1,self.time,self.press,ylim=[0,1.5],label=r'FIG HL11',nrows=nrows,loc='upper right',ncol=1,col=def_col[0],ytitle='Pa')
-        self.plot_output(axes,1,1,self.time,self.p0sub,ylim=[0,1.5],label=r'Pred',nrows=nrows,loc='upper right',ncol=1,col=def_col[1],ytitle='Pa')
-        self.plot_output(axes,1,1,self.time,self.p0,ylim=[0,1.5],label=r'Pred div',ls='--',alpha=0.3,nrows=nrows,loc='upper right',ncol=1,col=def_col[1],ytitle='Pa')
+        self.plot_output(axes,0,0,self.time,self.dens/1e19,ylim=[0,9],nrows=nrows,xlim=[0,self.tend],label=r'Line averaged density',col=def_col[0],loc='upper right',xtitle='Time [s]',ytitle=r'm')
+        self.plot_output(axes,0,0,self.time,self.pred_dens/1e19,ylim=[0,9],nrows=nrows,xlim=[0,self.tend],label=r'DART density',col=def_col[1],loc='upper right',xtitle='Time [s]',ytitle=r'm')
+        self.plot_output(axes,1,0,self.time,self.p0mid*1000.0,ylim=[0,6.0],nrows=nrows,xlim=[0,self.tend],label=r'Midplane FIG',col=def_col[0],loc='upper right',xtitle='Time [s]',ytitle=r'mPa')
+        self.plot_output(axes,1,0,self.time,self.p0midpred*1000.0,ylim=[0,6.0],nrows=nrows,xlim=[0,self.tend],label=r'DART midplane (FIG)',col=def_col[1],loc='upper right',xtitle='Time [s]',ytitle=r'mPa')
+        self.plot_output(axes,0,1,self.time,self.p0up,ylim=[0,1.5],label=r'Upper FIG',nrows=nrows,xlim=[0,self.tend],col=def_col[0],loc='upper right',xtitle='Time [s]',ytitle=r'Pa')
+        self.plot_output(axes,0,1,self.time,self.p0uppred,ylim=[0,1.5],label=r'DART sub-div. (FIG)',nrows=nrows,xlim=[0,self.tend],col=def_col[1],loc='upper right',xtitle='Time [s]',ytitle=r'Pa')
+        self.plot_output(axes,0,1,self.time,self.p0uppred2,ylim=[0,1.5],label=r'DART div.',xlim=[0,self.tend],ls='--',alpha=0.8,nrows=nrows,col=def_col[2],loc='upper right',xtitle='Time [s]',ytitle=r'Pa')
+        self.plot_output(axes,1,1,self.time,self.press,ylim=[0,1.5],label=r'Lower FIG',xlim=[0,self.tend],nrows=nrows,loc='upper right',col=def_col[0],ytitle='Pa')
+        self.plot_output(axes,1,1,self.time,self.p0sub,ylim=[0,1.5],label=r'DART sub-div. (FIG)',xlim=[0,self.tend],loc='upper right',col=def_col[1],ytitle='Pa',nrows=nrows)
+        self.plot_output(axes,1,1,self.time,self.p0,ylim=[0,1.5],label=r'DART div.',ls='--',xlim=[0,self.tend],alpha=0.8,nrows=nrows,loc='upper right',col=def_col[2],ytitle='Pa',xtitle='Time [s]')
         if canvas is None:
             plt.show()
         else:
             canvas.figure = fig
             canvas.draw()
       
+    def plot_GUIDEextra(self,canvas=None):
+        plt.rcParams['font.family'] = 'serif'  # Choose font family
+        plt.rcParams['font.serif'] = ['Arial']  # Specify font
+        nrows=2
+
+        fig, axes = plt.subplots(nrows=2, ncols=2, sharex=True, figsize=(11, 8))
+        fig.subplots_adjust(hspace=0.09,left=0.1,top=0.96, bottom=0.1,right=0.96)
+        self.fs = 16
+        def_col = ['black','#E41A1C' ,'#0072B2', '#D95F02', '#4DAF4A', '#377EB8', '#A65628']
+        self.plot_output(axes,0,0,self.reservoir_output.t_array,self.reservoir_output.plasma_influx[:,0],xlim=[0,5],ylim=[0,1e22],nrows=nrows,label=r'HFS',col=def_col[1],loc='upper right',xtitle='Time [s]',ytitle=r'Pa')
+##        self.plot_output(axes,0,0,self.reservoir_output.t_array,self.reservoir_output.hfs_main[:,0],xlim=[0,5],ylim=[0,1],nrows=nrows,label=r'HFS',col=def_col[1],loc='upper right',xtitle='Time [s]',ytitle=r'Pa')
+##        self.plot_output(axes,0,0,self.reservoir_output.t_array,self.reservoir_output.lpfr[:,0],xlim=[0,5],ylim=[0,1],nrows=nrows,label=r'LPFR',col=def_col[2],loc='upper right',xtitle='Time [s]',ytitle=r'Pa')
+##        self.plot_output(axes,0,0,self.reservoir_output.t_array,self.reservoir_output.upfr[:,0],xlim=[0,5],ylim=[0,1],nrows=nrows,label=r'UPFR',col=def_col[3],loc='upper right',xtitle='Time [s]',ytitle=r'Pa')
+        self.plot_output(axes,0,1,self.time,self.p0mid,ylim=[0,1.0],nrows=nrows,xlim=[0,5],label=r'FIG HM12',col=def_col[0],loc='upper right',xtitle='Time [s]',ytitle=r'mPa')
+        self.plot_output(axes,0,1,self.reservoir_output.t_array,self.reservoir_output.lfs_main[:,0],xlim=[0,5],ylim=[0,1],nrows=nrows,label=r'LFS',col=def_col[1],loc='upper right',xtitle='Time [s]',ytitle=r'Pa')
+        self.plot_output(axes,0,1,self.reservoir_output.t_array,self.reservoir_output.llfs_main[:,0],xlim=[0,5],ylim=[0,1],nrows=nrows,label=r'LLFS',col=def_col[2],loc='upper right',xtitle='Time [s]',ytitle=r'Pa')
+        self.plot_output(axes,0,1,self.reservoir_output.t_array,self.reservoir_output.ulfs_main[:,0],xlim=[0,5],ylim=[0,1],nrows=nrows,label=r'ULFS',col=def_col[3],loc='upper right',xtitle='Time [s]',ytitle=r'Pa')
+        self.plot_output(axes,1,0,self.time,self.p0up,xlim=[0,5],ylim=[0,1],label=r'FIG HU08',nrows=nrows,col=def_col[0],loc='upper right',xtitle='Time [s]',ytitle=r'Pa')
+        self.plot_output(axes,1,0,self.reservoir_output.t_array,self.reservoir_output.udiv[:,0],xlim=[0,5],ylim=[0,1],nrows=nrows,label=r'UDIV',col=def_col[1],loc='upper right',xtitle='Time [s]',ytitle=r'Pa')
+        self.plot_output(axes,1,0,self.reservoir_output.t_array,self.reservoir_output.subudiv[:,0],xlim=[0,5],ylim=[0,1],nrows=nrows,label=r'SUDIV',col=def_col[2],loc='upper right',xtitle='Time [s]',ytitle=r'Pa')
+        self.plot_output(axes,1,0,self.reservoir_output.t_array,self.reservoir_output.ssubudiv[:,0],xlim=[0,5],ylim=[0,1],nrows=nrows,label=r'SSUDIV',col=def_col[3],loc='upper right',xtitle='Time [s]',ytitle=r'Pa')
+        self.plot_output(axes,1,1,self.time,self.press,xlim=[0,5],ylim=[0,1.0],label=r'FIG HL11',nrows=nrows,loc='upper right',col=def_col[0],ytitle='Pa')
+        self.plot_output(axes,1,1,self.reservoir_output.t_array,self.reservoir_output.ldiv[:,0],xlim=[0,5],ylim=[0,1],nrows=nrows,label=r'LDIV',col=def_col[1],loc='upper right',xtitle='Time [s]',ytitle=r'Pa')
+        self.plot_output(axes,1,1,self.reservoir_output.t_array,self.reservoir_output.subldiv[:,0],xlim=[0,5],ylim=[0,1],nrows=nrows,label=r'SLDIV',col=def_col[2],loc='upper right',xtitle='Time [s]',ytitle=r'Pa')
+        self.plot_output(axes,1,1,self.reservoir_output.t_array,self.reservoir_output.ssubldiv[:,0],xlim=[0,5],ylim=[0,1],nrows=nrows,label=r'SSLDIV',col=def_col[3],loc='upper right',xtitle='Time [s]',ytitle=r'Pa')
+        if canvas is None:
+            plt.show()
+        else:
+            canvas.figure = fig
+            canvas.draw()
     def run(self,progress_bar=None,root=None):
         if self.time is None:
             exit('Please provide inputs')
@@ -371,11 +448,16 @@ class dart:
             self.fz=45.0
             self.max_conc=0.1  
             self.amass = 20.0
-        if imp.lower() == 'n' or imp.lower() == 'd':             
-            self.Zavr = 6
+        if imp.lower() == 'n':             
+            self.Zavr = 5
             self.fz=18.0
             self.max_conc=0.2  
             self.amass = 14.0
+        if imp.lower() == 'd':             
+            self.Zavr = 1
+            self.fz=1.0
+            self.max_conc=0.5  
+            self.amass = 2.0
         if imp.lower() == 'none':             
             self.Zavr = 1
             self.fz=0.0
@@ -532,24 +614,24 @@ class dart:
         fig.subplots_adjust(hspace=0.09,left=0.1,top=0.96, bottom=0.1,right=0.96)
         self.fs = 16
         def_col = ['black','#E41A1C' ,'#0072B2', '#D95F02', '#4DAF4A', '#377EB8', '#A65628']
-        self.plot_output(axes,0,0,self.time,self.Psep/self.R0/1e6,ylim=[0,30],label=r'P$_{sep}$/R$_0$',loc='upper right',ncol=1,col=def_col[0],ytitle='MW/m,MA')
-        self.plot_output(axes,0,0,self.time,self.Ip/1e6,ylim=[0,np.max([np.max(self.Ip)/1e6,np.max(self.Psep/self.R0)/1e6])*1.7],label=f'Plasma current',loc='upper right',ncol=1,col=def_col[1],ytitle='MW/m,MA')
-        self.plot_output(axes,1,0,self.time,self.nsep/1e19,ylim=[0,np.max(self.nsep)/1e19*1.5],col=def_col[0],label=f'Separatrix density',loc='upper right',ncol=1,ytitle=r'10$^{19}$ m$^{-3}$')
+        self.plot_output(axes,0,0,self.time,self.Psep/self.R0/1e6,ylim=[0,30],label=r'P$_{sep}$/R$_0$',loc='upper right',col=def_col[0],ytitle='MW/m,MA')
+        self.plot_output(axes,0,0,self.time,self.Ip/1e6,ylim=[0,np.nanmax([np.max(self.Ip)/1e6,np.max(self.Psep/self.R0)/1e6])*1.7],label=f'Plasma current',loc='upper right',col=def_col[1],ytitle='MW/m,MA')
+        self.plot_output(axes,1,0,self.time,self.nsep/1e19,ylim=[0,np.nanmax(self.nsep)/1e19*1.5],col=def_col[0],label=f'Separatrix density',loc='upper right',ytitle=r'10$^{19}$ m$^{-3}$')
         self.plot_output(axes,2,0,self.time,self.lq_lower*1000,z=self.lq_upper*1000,alpha=0.7,ylim=[0.1,100],ylog=True,label=r'$\lambda_{q,Sim. input}$',col=def_col[0],xtitle='Time [s]')
         self.plot_output(axes,2,0,self.time,self.lq_14*1000,ylim=[0.1,800],ylog=True,label=r'$\lambda_{q,Eich \#14}$',col=def_col[1],xtitle='Time [s]')
         self.plot_output(axes,2,0,self.time,self.lq_09*1000,ylim=[0.1,800],ylog=True,label=r'$\lambda_{q,Eich \#9}$',col=def_col[2],xtitle='Time [s]')
         self.plot_output(axes,2,0,self.time,self.lqat_lower*1000,ylim=[0.1,800],ylog=True,label=r'$\lambda_{q,Eich (inc. \alpha_T)}$',col=def_col[4],xtitle='Time [s]')
         self.plot_output(axes,2,0,self.time,self.lq_HDz*1000,ylim=[0.1,800],ylog=True,label=r'$\lambda_{q,HD (Z_{eff}=10)}$',col=def_col[3],xtitle='Time [s]')
         self.plot_output(axes,2,0,self.time,self.lq_ST*1000,ylim=[0.1,800],ylog=True,label=r'$\lambda_{q,Thornton \#2}$',col=def_col[5],xtitle='Time [s]',ytitle='mm')
-        self.plot_output(axes,0,1,self.time,self.qp_lower/1e9,alpha=0.6,z=self.qp_upper/1e9,ylim=[0,np.max(self.qp_lower)/1e9*2.0],label=f'Unmitigated parallel\nenergy flux density',loc='upper right',ncol=1,col=def_col[0],ytitle=r'GWm$^{-2}$')
+        self.plot_output(axes,0,1,self.time,self.qp_lower/1e9,alpha=0.6,z=self.qp_upper/1e9,ylim=[0,np.nanmax(self.qp_lower)/1e9*2.0],label=f'Unmitigated parallel\nenergy flux density',loc='upper right',col=def_col[0],ytitle=r'GWm$^{-2}$')
        
-        self.plot_output(axes,1,1,self.time,self.cz_lower*100,z=self.cz_upper*100,alpha=0.6,label=self.imp+' conc.',loc='upper right',ncol=1,ylim=[0,25],col=def_col[0],ytitle='%, Pa, 10$^{22}$ #/s')
-        self.plot_output(axes,1,1,self.time,self.p0_lower,z=self.p0_upper,ylim=[0,15],label='Divertor press.',loc='upper right',ncol=1,col=def_col[1])
+        self.plot_output(axes,1,1,self.time,self.cz_lower*100,z=self.cz_upper*100,alpha=0.6,label=self.imp+' conc.',loc='upper right',ylim=[0,25],col=def_col[0],ytitle='%, Pa, 10$^{22}$ #/s')
+        self.plot_output(axes,1,1,self.time,self.p0_lower,z=self.p0_upper,ylim=[0,15],label='Divertor press.',loc='upper right',col=def_col[1])
         self.dpuff_lower = self.dflow(self.p0_lower)
         self.dpuff_upper = self.dflow(self.p0_upper)
-        self.plot_output(axes,1,1,self.time,self.dpuff_lower/1e22,z=self.dpuff_upper/1e22,label='DT flow rate',ncol=1,loc='upper right',ylim=[0,np.min([np.max([np.max(self.cz_lower)*100,np.max(self.p0_upper),np.max(self.dpuff_lower)/1e22])*2.0,25])],col=def_col[2],ytitle='%, Pa, 10$^{22}$ #/s')
-        self.plot_output(axes,2,1,self.time,self.qt_lower,alpha=0.6,z=self.qt_upper,ylim=[0,30],col=def_col[0],xtitle='Time [s]',label=f'Target heat load',loc='center left',ncol=1,ytitle=r'MWm$^{-2}$')
-        self.plot_output(axes,2,1,self.time,self.td_lower,z=self.td_upper,ylim=[0,np.min([np.max([np.max(self.td_upper),np.max(self.qt_lower)])*1.7,30.0])],col=def_col[1],xtitle='Time [s]',label=f'Target temp.',loc='center left',ncol=1,ytitle=r'MWm$^{-2}$, eV')
+        self.plot_output(axes,1,1,self.time,self.dpuff_lower/1e22,z=self.dpuff_upper/1e22,label='DT flow rate',loc='upper right',ylim=[0,np.min([np.max([np.nanmax(self.cz_lower)*100,np.nanmax(self.p0_upper),np.nanmax(self.dpuff_lower)/1e22])*2.0,25])],col=def_col[2],ytitle='%, Pa, 10$^{22}$ #/s')
+        self.plot_output(axes,2,1,self.time,self.qt_lower,alpha=0.6,z=self.qt_upper,ylim=[0,30],col=def_col[0],xtitle='Time [s]',label=f'Target heat load',loc='center left',ytitle=r'MWm$^{-2}$')
+        self.plot_output(axes,2,1,self.time,self.td_lower,z=self.td_upper,ylim=[0,np.min([np.max([np.nanmax(self.td_upper),np.nanmax(self.qt_lower)])*1.7,30.0])],col=def_col[1],xtitle='Time [s]',label=f'Target temp.',loc='center left',ytitle=r'MWm$^{-2}$, eV')
         if canvas is None:
             plt.show()
         else:
@@ -565,9 +647,9 @@ class dart:
         fig.subplots_adjust(hspace=0.09,left=0.1,top=0.96, bottom=0.1,right=0.96)
         self.fs = 16
         def_col = ['black','#E41A1C' ,'#0072B2', '#D95F02', '#4DAF4A', '#377EB8', '#A65628']
-        self.plot_output(axes,0,0,self.time,self.Psep/self.R0/1e6,ylim=[0,30],label=r'P$_{sep}$/R$_0$',loc='upper right',ncol=1,nrows=nrows,col=def_col[0],ytitle='MW/m,MA')
-        self.plot_output(axes,0,0,self.time,self.Ip/1e6,ylim=[0,np.max([np.max(self.Ip)/1e6,np.max(self.Psep/self.R0)/1e6])*2.0],nrows=nrows,label=f'Plasma current',loc='upper right',ncol=1,col=def_col[1],ytitle='MW/m,MA')
-        self.plot_output(axes,0,0,self.time,self.nsep/1e19,nrows=nrows,ylim=[0,np.max([np.max(self.nsep)/1e19,np.max(self.Ip)/1e6,np.max(self.Psep/self.R0)/1e6])*1.7],col=def_col[2],label=f'Separatrix density',loc='upper right',ncol=1,ytitle=r'10$^{19}$ m$^{-3}$')
+        self.plot_output(axes,0,0,self.time,self.Psep/self.R0/1e6,ylim=[0,30],label=r'P$_{sep}$/R$_0$',loc='upper right',nrows=nrows,col=def_col[0],ytitle='MW/m,MA')
+        self.plot_output(axes,0,0,self.time,self.Ip/1e6,ylim=[0,np.max([np.nanmax(self.Ip)/1e6,np.nanmax(self.Psep/self.R0)/1e6])*2.0],nrows=nrows,label=f'Plasma current',loc='upper right',col=def_col[1],ytitle='MW/m,MA')
+        self.plot_output(axes,0,0,self.time,self.nsep/1e19,nrows=nrows,ylim=[0,np.max([np.nanmax(self.nsep)/1e19,np.nanmax(self.Ip)/1e6,np.nanmax(self.Psep/self.R0)/1e6])*1.7],col=def_col[2],label=f'Separatrix density',loc='upper right',ytitle=r'10$^{19}$ m$^{-3}$')
         self.plot_output(axes,1,0,self.time,self.lq_lower*1000,z=self.lq_upper*1000,alpha=0.7,ylim=[0.1,100],nrows=nrows,ylog=True,label=r'$\lambda_{q,Sim. input}$',col=def_col[0],xtitle='Time [s]')
         self.plot_output(axes,1,0,self.time,self.lq_14*1000,ylim=[0.1,800],ylog=True,label=r'$\lambda_{q,Eich \#14}$',nrows=nrows,col=def_col[1],xtitle='Time [s]')
         self.plot_output(axes,1,0,self.time,self.lq_09*1000,ylim=[0.1,800],ylog=True,label=r'$\lambda_{q,Eich \#9}$',nrows=nrows,col=def_col[2],xtitle='Time [s]')
@@ -575,16 +657,48 @@ class dart:
         self.plot_output(axes,1,0,self.time,self.lq_HDz*1000,ylim=[0.1,800],ylog=True,label=r'$\lambda_{q,HD (Z_{eff}=10)}$',nrows=nrows,col=def_col[3],xtitle='Time [s]')
         self.plot_output(axes,1,0,self.time,self.lq_ST*1000,ylim=[0.1,800],ylog=True,label=r'$\lambda_{q,Thornton \#2}$',nrows=nrows,col=def_col[5],xtitle='Time [s]',ytitle='mm')
        
-        self.plot_output(axes,0,1,self.time,self.cz_lower*100,z=self.cz_upper*100,alpha=0.6,label=self.imp+' conc.',loc='upper right',nrows=nrows,ncol=1,ylim=[0,25],col=def_col[0],ytitle='%, Pa, 10$^{22}$ #/s')
-        self.plot_output(axes,0,1,self.time,self.p0_lower,z=self.p0_upper,ylim=[0,15],label='Divertor press.',loc='upper right',nrows=nrows,ncol=1,col=def_col[1])
+        self.plot_output(axes,0,1,self.time,self.cz_lower*100,z=self.cz_upper*100,alpha=0.6,label=self.imp+' conc.',loc='upper right',nrows=nrows,ylim=[0,25],col=def_col[0],ytitle='%, Pa, 10$^{22}$ #/s')
+        self.plot_output(axes,0,1,self.time,self.p0_lower,z=self.p0_upper,ylim=[0,15],label='Divertor press.',loc='upper right',nrows=nrows,col=def_col[1])
         self.dpuff_lower = self.dflow(self.p0_lower)
         self.dpuff_upper = self.dflow(self.p0_upper)
-        self.plot_output(axes,0,1,self.time,self.dpuff_lower/1e22,z=self.dpuff_upper/1e22,label='DT flow rate',nrows=nrows,ncol=1,loc='upper right',ylim=[0,np.max([np.max(self.cz_lower)*100,np.max(self.p0_upper),np.max(self.dpuff_lower)/1e22])*2.0],col=def_col[2],ytitle='%, Pa, 10$^{22}$ #/s')
-        self.plot_output(axes,1,1,self.time,self.qt_lower,alpha=0.6,z=self.qt_upper,ylim=[0,30],col=def_col[0],nrows=nrows,xtitle='Time [s]',label=f'Target heat load',loc='center left',ncol=1,ytitle=r'MWm$^{-2}$')
-        self.plot_output(axes,1,1,self.time,self.td_lower,z=self.td_upper,ylim=[0,np.max([np.max(self.td_upper),np.max(self.qt_lower)])*1.7],col=def_col[1],xtitle='Time [s]',nrows=nrows,label=f'Target temp.',loc='upper right',ncol=1,ytitle=r'MWm$^{-2}$, eV')
+        self.plot_output(axes,0,1,self.time,self.dpuff_lower/1e22,z=self.dpuff_upper/1e22,label='DT flow rate',nrows=nrows,loc='upper right',ylim=[0,np.max([np.nanmax(self.cz_lower)*100,np.nanmax(self.p0_upper),np.nanmax(self.dpuff_lower)/1e22])*2.0],col=def_col[2],ytitle='%, Pa, 10$^{22}$ #/s')
+        self.plot_output(axes,1,1,self.time,self.qt_lower,alpha=0.6,z=self.qt_upper,ylim=[0,30],col=def_col[0],nrows=nrows,xtitle='Time [s]',label=f'Target heat load',loc='center left',ytitle=r'MWm$^{-2}$')
+        self.plot_output(axes,1,1,self.time,self.td_lower,z=self.td_upper,ylim=[0,np.max([np.nanmax(self.td_upper),np.nanmax(self.qt_lower)])*1.7],col=def_col[1],xtitle='Time [s]',nrows=nrows,label=f'Target temp.',loc='upper right',ytitle=r'MWm$^{-2}$, eV')
         if canvas is None:
             plt.show()
         else:
+            #plt.savefig('/home/shenders/Images/DART.png',dpi=300,transparent=True)
+            canvas.figure = fig
+            canvas.draw()
+    def display_talk(self,canvas=None):
+        # Create figure and axes
+        plt.rcParams['font.family'] = 'serif'  # Choose font family
+        plt.rcParams['font.serif'] = ['Arial']  # Specify font
+        nrows=3
+        fig, axes = plt.subplots(nrows=nrows, ncols=1, sharex=True, figsize=(6, 8))
+        fig.subplots_adjust(hspace=0.1,left=0.15,top=0.96, bottom=0.1,right=0.97)
+        self.fs = 16
+        def_col = ['black','#E41A1C' ,'#0072B2', '#E69F00', '#009E73', '#CC79A7','#666666']
+        self.plot_output(axes,0,0,self.time,self.Psep/self.R0/1e6,ylim=[0,50],label=r'P$_{sep}$/R$_0$',loc='upper right',ncol=1,nrows=nrows,col=def_col[0],ytitle='MW/m, MA, 10$^{18}$ m$^{-3}$')
+        self.plot_output(axes,0,0,self.time,self.Ip/1e6,ylim=[0,50],nrows=nrows,ncol=1,label=f'Plasma current',loc='upper right',col=def_col[1],ytitle='MW/m, MA, 10$^{18}$ m$^{-3}$')
+        self.plot_output(axes,0,0,self.time,self.nsep/1e18,nrows=nrows,ylim=[0,50],ncol=1,col=def_col[2],label=f'Separatrix density',loc='upper center',ytitle=r'MW/m, MA, 10$^{18}$ m$^{-3}$')
+        self.plot_output(axes,1,0,self.time,self.lq_lower*1000,z=self.lq_upper*1000,alpha=0.7,ylim=[0.1,100],nrows=nrows,ylog=True,loc='upper center',label=r'$\lambda_{q,Sim. input}$',ncol=1,col=def_col[0],xtitle='Time [s]')
+        self.plot_output(axes,1,0,self.time,self.lq_14*1000,ylim=[0.1,800],ylog=True,label=r'$\lambda_{q,Eich \#14}$',nrows=nrows,ncol=1,loc='upper center',col=def_col[1],xtitle='Time [s]')
+        self.plot_output(axes,1,0,self.time,self.lq_09*1000,ylim=[0.1,800],ylog=True,label=r'$\lambda_{q,Eich \#9}$',nrows=nrows,ncol=1,loc='upper center',col=def_col[2],xtitle='Time [s]')
+        self.plot_output(axes,1,0,self.time,self.lqat_lower*1000,ylim=[0.1,800],ylog=True,label=r'$\lambda_{q,Eich (inc. \alpha_T)}$',nrows=nrows,loc='upper center',ncol=1,col=def_col[4],xtitle='Time [s]')
+        self.plot_output(axes,1,0,self.time,self.lq_HDz*1000,ylim=[0.1,800],ylog=True,label=r'$\lambda_{q,HD (Z_{eff}=10)}$',nrows=nrows,ncol=1,loc='upper center',col=def_col[3],xtitle='Time [s]')
+        self.plot_output(axes,1,0,self.time,self.lq_ST*1000,ylim=[0.1,800],ylog=True,label=r'$\lambda_{q,Thornton \#2}$',nrows=nrows,ncol=1,loc='upper center',col=def_col[5],xtitle='Time [s]',ytitle='mm')
+       
+        self.plot_output(axes,2,0,self.time,self.cz_lower*100,z=self.cz_upper*100,alpha=0.6,label=self.imp+' conc.',loc='upper center',nrows=nrows,ncol=1,ylim=[0,10],col=def_col[0],ytitle='%, Pa, MWm$^{-2}$')
+        self.plot_output(axes,2,0,self.time,self.p0_lower,z=self.p0_upper,ylim=[0,10],label='Divertor press.',loc='upper center',nrows=nrows,ncol=1,col=def_col[1])
+        self.plot_output(axes,2,0,self.time,self.qt_lower,alpha=0.6,z=self.qt_upper,ylim=[0,10],col=def_col[2],nrows=nrows,xtitle='Time [s]',ncol=1,label=f'Target heat load',loc='upper center',ytitle=r'%, Pa, MWm$^{-2}$')
+        if canvas is None:
+            plt.show()
+        else:
+            try:
+                plt.savefig('/home/shenders/Images/DART1.png',dpi=300,transparent=True)
+            except:
+                pass
             canvas.figure = fig
             canvas.draw()
     def display_useful(self,canvas=None):
@@ -596,24 +710,31 @@ class dart:
         fig.subplots_adjust(hspace=0.09,left=0.1,top=0.96, bottom=0.1,right=0.96)
         self.fs = 16
         def_col = ['black','#E41A1C' ,'#0072B2', '#D95F02', '#4DAF4A', '#377EB8', '#A65628']
-        self.plot_output(axes,0,0,self.time,self.lc,ylim=[0,np.max(self.lc)*1.2],col=def_col[0],nrows=nrows,label=f'Connection length',loc='upper right',ncol=1,ytitle=r'm')
-        self.plot_output(axes,1,0,self.time,self.Bp,label='Poloidal field',xtitle='Time [s]',loc='upper right',nrows=nrows,ylim=[0,np.max(self.Bp)*2.0],col=def_col[2],ytitle='T')
-        self.plot_output(axes,0,1,self.time,self.qcyl,ylim=[0,np.max(self.qcyl)*1.2],col=def_col[0],xtitle='Time [s]',nrows=nrows,label=f'qcyl',loc='upper right',ncol=1,ytitle=r'')
-        self.plot_output(axes,1,1,self.time,self.ts_lower,alpha=0.6,z=self.ts_upper,xtitle='Time [s]',nrows=nrows,ylim=[0,np.max(self.ts_lower)*1.5],label=f'Separatrix temperature',loc='upper right',ncol=1,col=def_col[0],ytitle=r'eV')
+        self.plot_output(axes,0,0,self.time,self.lc,ylim=[0,np.nanmax(self.lc)*1.2],col=def_col[0],nrows=nrows,label=f'Connection length',loc='upper right',ytitle=r'm')
+        self.plot_output(axes,1,0,self.time,self.Bp,label='Poloidal field',xtitle='Time [s]',loc='upper right',nrows=nrows,ylim=[0,np.nanmax(self.Bp)*2.0],col=def_col[2],ytitle='T')
+        self.plot_output(axes,0,1,self.time,self.qcyl,ylim=[0,np.nanmax(self.qcyl)*1.2],col=def_col[0],xtitle='Time [s]',nrows=nrows,label=f'qcyl',loc='upper right',ytitle=r'')
+        self.plot_output(axes,1,1,self.time,self.ts_lower,alpha=0.6,z=self.ts_upper,xtitle='Time [s]',nrows=nrows,ylim=[0,np.nanmax(self.ts_lower)*1.5],label=f'Separatrix temperature',loc='upper right',col=def_col[0],ytitle=r'eV')
         if canvas is None:
             plt.show()
         else:
             canvas.figure = fig
             canvas.draw()
 
-    def plot_setup(self,axes,i,j,ytitle=None,xtitle=None,xlim=[0,10],xlog=False,ylog=False,ylim=None,nrows=3):
+    def plot_setup(self,axes,i,j,ytitle=None,xtitle=None,xlim=[0,10],xlog=False,ylog=False,ylim=None,nrows=3,ncol=2):
         bbox_props = dict(boxstyle='square',  facecolor=(0.97, 0.97, 0.97))
-        ax = axes[i,j]
-        if nrows == 3:
+        if ncol == 1:
+            ax = axes[i]
+        else:
+            ax = axes[i,j]
+        if nrows == 3 and ncol > 1:
             labels=np.array([['a','b','c'],['d','e','f']])
-        if nrows == 2:
+            ax.text(0.03, 0.95, f'({labels[j,i]})', transform=ax.transAxes, fontsize=self.fs, va='top', ha='left')
+        if nrows == 2 and ncol > 1:
             labels=np.array([['a','b'],['c','d']])
-        ax.text(0.03, 0.95, f'({labels[j,i]})', transform=ax.transAxes, fontsize=self.fs, va='top', ha='left')
+            ax.text(0.03, 0.95, f'({labels[j,i]})', transform=ax.transAxes, fontsize=self.fs, va='top', ha='left')
+        if ncol == 1:
+            labels=np.array(['a','b','c'])
+            ax.text(0.03, 0.95, f'({labels[i]})', transform=ax.transAxes, fontsize=self.fs, va='top', ha='left')
         ax.tick_params(axis='both', right=True, which='both',top=True, direction='in', length=4, width=0.5, bottom=True, labelbottom=False,labelsize=self.fs)
         ax.tick_params(axis='both', right=True, which='minor',length=2)
         ax.minorticks_on()
@@ -626,6 +747,9 @@ class dart:
         ax.set_xlim(xlim)
         ax.set_ylim(ylim)
         ax.set_ylabel(ytitle, fontsize=self.fs)
+        ax.set_facecolor('white')           # white plot area
+        ax.patch.set_alpha(1.0)
+        white_axes_background(ax)
 ##        if nrows == 3:
 ##            if i == 0 and j == 0:
 ##                ax.set_title('Inputs', fontsize=self.fs)
@@ -635,17 +759,22 @@ class dart:
             ax.set_xscale('log')
         if ylog:
             ax.set_yscale('log')
+
         if i == nrows-1:
             ax.tick_params(axis='x', which='both', bottom=True,
                            labelbottom=True,labelsize=self.fs) 
             ax.set_xlabel(xtitle)
 
     def plot_output(self,axes,i,j,x,y,z=None,psym=None,mfc=None,mec='black',ls='-',
-                    xtitle=None,ytitle=None,ylim=None,col=None,xlim=None,
+                    xtitle=None,ytitle=None,ylim=None,col=None,xlim=None,nlcol=1,
                     label=None,alf=1.0,xlog=False,ylog=False,ncol=2,nrows=3,loc=None,alpha=1.0):
-        xlim = [0.0,np.max(self.time)]
-        self.plot_setup(axes,i,j,ytitle=ytitle,xtitle=xtitle,xlim=xlim,ylim=ylim,xlog=xlog,ylog=ylog,nrows=nrows)
-        ax = axes[i,j]
+        if xlim is None:
+            xlim = [0.0,np.max(self.time)]
+        self.plot_setup(axes,i,j,ytitle=ytitle,xtitle=xtitle,xlim=xlim,ylim=ylim,xlog=xlog,ylog=ylog,nrows=nrows,ncol=ncol)
+        if ncol == 1:
+            ax = axes[i]
+        else:
+            ax = axes[i,j]
         if z is not None:
             ax.fill_between(x,y,z,alpha=alpha*0.5,color=col,label=label)
         else:
@@ -653,7 +782,7 @@ class dart:
                     markeredgecolor=mec,color=col,label=label,alpha=alpha)
         if label is not None:
             
-            ax.legend(fontsize=self.fs-3,ncol=ncol,loc=loc)
+            ax.legend(fontsize=self.fs-3,ncol=nlcol,loc=loc)
 if __name__ == "__main__":
     # Standard manual input of waveforms
     #run = dart(machine='step',configuration='double-null')

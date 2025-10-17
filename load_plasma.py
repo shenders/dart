@@ -54,9 +54,14 @@ class plasma:
                 cutoff_idx = drop_idxs[0]
             else:
                 cutoff_idx = len(self.Ip)
-            idt = np.arange(0, cutoff_idx)
-            self.time = self.time[idt]
-            self.Ip   = self.Ip[idt]
+##            idt = np.arange(0, cutoff_idx)
+##            self.time = self.time[idt]
+##            self.Ip   = self.Ip[idt]
+            self.pulse_end = self.time[cutoff_idx]
+            stime = np.where(self.time > -0.1)[0]
+            self.time = self.time[stime]
+            self.Ip   = self.Ip[stime]
+            
         except Exception as e:
             self.time = np.linspace(0,1,100)
             self.Ip   = np.zeros(len(self.time))

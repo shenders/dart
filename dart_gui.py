@@ -3,11 +3,10 @@ import subprocess
 import json
 import sys
 import copy
-import functools
 
-#if sys.version_info[:2] != (3, 7):
-#    print("⚠️  This script requires Python 3.7 due to outdated tkinter version 8.5. Please run it with Python 3.7.")
-#    sys.exit(1)
+if sys.version_info[:2] != (3, 7):
+    print("⚠️  This script requires Python 3.7 due to outdated tkinter version 8.5. Please run it with Python 3.7.")
+    sys.exit(1)
 try:
     import ttkbootstrap as ttk
 except ImportError:
@@ -22,6 +21,12 @@ from dart import dart
 from scipy.interpolate import interp1d
 import numpy as np
 from load_plasma import plasma
+import matplotlib as mpl
+
+# Global defaults for the Save button
+mpl.rcParams['savefig.dpi'] = 300              # or an int you like
+mpl.rcParams['savefig.transparent'] = True     # make background transparent
+#mpl.rcParams['axes.facecolor']     = 'white'  # axes bg white
 class CustomToolbar(NavigationToolbar2Tk):
     def __init__(self, canvas, parent):
         super().__init__(canvas, parent)
@@ -33,8 +38,7 @@ class CustomToolbar(NavigationToolbar2Tk):
         for button in self.winfo_children():
             if isinstance(button, tk.Button):
                 if "forward" in button.cget("text").lower() or "back" in button.cget("text").lower():
-                    #button.destroy()
-                    button.config(state="disabled")
+                    button.destroy()
     def set_message(self, s):
         """Override this method to prevent x, y coordinates from displaying."""
         pass  # Do nothing instead of displaying coordinates
@@ -230,6 +234,8 @@ class DartGUI:
         self.right_notebook.add(self.condensed_tab, text="Plot panel 2")
         self.useful_tab = ttk.Frame(self.right_notebook)
         self.right_notebook.add(self.useful_tab, text="Plot panel 3")
+        self.extra_tab = ttk.Frame(self.right_notebook)
+        self.right_notebook.add(self.extra_tab, text="Plot panel 4")
 
 
         # Gas valves
@@ -276,19 +282,9 @@ class DartGUI:
         self.div2sub_entry.grid(row=1, column=1, sticky="w")
         self.div2sub_entry.insert(0, "0.5")
 
-        self.recycling_frame = tk.LabelFrame(self.guide_tab, text="Plasma recycling fractions")
-        self.recycling_frame.grid(row=5, column=0, columnspan=2, pady=5, sticky="nsew")
-        tk.Label(self.recycling_frame, text="Divertors:").grid(row=0, column=0, sticky='w')
-        self.frac_div_entry = tk.Entry(self.recycling_frame, width=30)
-        self.frac_div_entry.grid(row=0, column=1, sticky="w")
-        self.frac_div_entry.insert(0, "0.1")
-        tk.Label(self.recycling_frame, text="LFS:").grid(row=1, column=0, sticky='w')
-        self.frac_lfs_entry = tk.Entry(self.recycling_frame, width=30)
-        self.frac_lfs_entry.grid(row=1, column=1, sticky="w")
-        self.frac_lfs_entry.insert(0, "0.12")
         
         self.pumping_frame = tk.LabelFrame(self.guide_tab, text="Pumping setup")
-        self.pumping_frame.grid(row=6, column=0, columnspan=2, pady=5, sticky="nsew")
+        self.pumping_frame.grid(row=5, column=0, columnspan=2, pady=5, sticky="nsew")
         # Pumping
         tk.Label(self.pumping_frame, text="Lower cryopump:").grid(row=0, column=0, sticky='w')
         self.cryo = tk.IntVar(value=1)
@@ -298,16 +294,33 @@ class DartGUI:
         tk.Label(self.pumping_frame, text="Cryo pumpspeed:").grid(row=1, column=0, sticky='w')
         self.cryo_pumpspeed_entry = tk.Entry(self.pumping_frame, width=30)
         self.cryo_pumpspeed_entry.grid(row=1, column=1, sticky="w")
-        self.cryo_pumpspeed_entry.insert(0, "10.0")
+        self.cryo_pumpspeed_entry.insert(0, "15.0")
 
         tk.Label(self.pumping_frame, text="Turbopump:").grid(row=2, column=0, sticky='w')
         self.turbo = tk.IntVar(value=1)
         self.turbo_checkbox = ttk.Checkbutton(self.pumping_frame, variable=self.turbo)
         self.turbo_checkbox.grid(row=2, column=1, sticky="nsew")
-        tk.Label(self.pumping_frame, text="Recycling fraction:").grid(row=3, column=0, sticky='w')
-        self.turbo_recycling_entry = tk.Entry(self.pumping_frame, width=30)
-        self.turbo_recycling_entry.grid(row=3, column=1, sticky="w")
-        self.turbo_recycling_entry.insert(0, "0.98955")
+        tk.Label(self.pumping_frame, text="Turbo pumpspeed:").grid(row=3, column=0, sticky='w')
+        self.turbo_pumpspeed_entry = tk.Entry(self.pumping_frame, width=30)
+        self.turbo_pumpspeed_entry.grid(row=3, column=1, sticky="w")
+        self.turbo_pumpspeed_entry.insert(0, "7.8")
+
+        tk.Label(self.pumping_frame, text="NBI pumping:").grid(row=4, column=0, sticky='w')
+        self.nbipump = tk.IntVar(value=1)
+        self.nbipump_checkbox = ttk.Checkbutton(self.pumping_frame, variable=self.nbipump)
+        self.nbipump_checkbox.grid(row=4, column=1, sticky="nsew")
+        tk.Label(self.pumping_frame, text="NBI pumpspeed:").grid(row=5, column=0, sticky='w')
+        self.nbi_pumpspeed_entry = tk.Entry(self.pumping_frame, width=30)
+        self.nbi_pumpspeed_entry.grid(row=5, column=1, sticky="w")
+        self.nbi_pumpspeed_entry.insert(0, "5.0")
+
+        self.output_frame = tk.LabelFrame(self.guide_tab, text="Output file")
+        self.output_frame.grid(row=6, column=0, columnspan=2, pady=5, sticky="nsew")
+        tk.Label(self.output_frame, text="Write file:").grid(row=0, column=0, sticky='w')
+        self.writedart = tk.IntVar(value=0)
+        self.writedart_checkbox = ttk.Checkbutton(self.output_frame, variable=self.writedart)
+        self.writedart_checkbox.grid(row=0, column=1, sticky="nsew")
+ 
         # Plasma particle confinement input
         x = np.array([0.015, 0.3, 0.9])*1000
         y = np.array([0.005]*len(x))*1000
@@ -352,7 +365,7 @@ class DartGUI:
         self.jetto_check1.grid(row=2, column=0, sticky="w")
         self.jetto_entry1 = tk.Entry(self.aim_tab, width=30)
         self.jetto_entry1.grid(row=2, column=1, sticky="w")
-        self.jetto_entry1.insert(0, "feriks/jetto/step/88888/oct3024/seq-1")
+        self.jetto_entry1.insert(0, "feriks/jetto/step/88888/mar0725/seq-1")
         self.jetto_entry1.config(state="disabled")
         self.jetto_check1.config(state="disabled")
             
@@ -380,8 +393,7 @@ class DartGUI:
             entry.insert(0, self.input_defaults[label])
             entry.grid(row=i, column=1, sticky="nsew")
             self.entries[label] = entry
-        self.edit_table_button = tk.Button(self.manual_frame, text="Edit Table", command=self.open_table_editor)
-        self.edit_table_button.grid(row=len(self.labels), column=0, columnspan=3, pady=5)
+        
         # Machine Details Frame
         self.machine_frame = tk.LabelFrame(self.aim_tab, text="Machine Details")
         self.machine_frame.grid(row=4, column=0, columnspan=6, pady=5, sticky="nsew")
@@ -441,109 +453,11 @@ class DartGUI:
         toolbar.update()
         toolbar.grid(row=1, column=0,sticky="nsew")
         self.canvas_useful.get_tk_widget().grid()
-    def open_table_editor(self):
-        top = tk.Toplevel(self.root)
-        top.title("Edit Input Table")
-        labels = self.labels
-
-        # Parse current data into a 2D list
-        data = []
-        max_len = max(len(self.entries[label].get().split(',')) for label in labels)
-        for i in range(max_len):
-            row = []
-            for label in labels:
-                vals = [v.strip() for v in self.entries[label].get().split(',')]
-                row.append(vals[i] if i < len(vals) else "")
-            data.append(row)
-
-        # Frame for the table
-        table_frame = tk.Frame(top)
-        table_frame.pack(side="top", fill="both", expand=True)
-
-        # Draw header
-        for col, label in enumerate(labels):
-            tk.Label(table_frame, text=label, font=("Arial", 9, "bold")).grid(row=0, column=col, padx=2, pady=2)
-        tk.Label(table_frame, text="").grid(row=0, column=len(labels), padx=2, pady=2)  # Header for delete buttons
-
-        # Store entry widgets
-        entry_grid = []
-
-        def rebuild_table():
-            # Clear all rows except header
-            for widget in table_frame.grid_slaves():
-                if int(widget.grid_info()["row"]) > 0:
-                    widget.destroy()
-            # Redraw all rows
-            for row_idx, entry_row in enumerate(entry_grid):
-                for col_idx, var in enumerate(entry_row[:-2]):
-                    entry = tk.Entry(table_frame, textvariable=var, width=10)
-                    entry.grid(row=row_idx+1, column=col_idx, padx=2, pady=2)
-                # Add "Add Row Before" button
-                add_btn = tk.Button(
-                    table_frame,
-                    text="Add Row Before",
-                    command=functools.partial(add_row_before, row_idx)
-                )
-                add_btn.grid(row=row_idx+1, column=len(labels), padx=2, pady=2)
-                # Add Delete button
-                del_btn = tk.Button(
-                    table_frame,
-                    text="Delete",
-                    command=functools.partial(delete_row, row_idx)
-                )
-                del_btn.grid(row=row_idx+1, column=len(labels)+1, padx=2, pady=2)
-                entry_row[-2] = add_btn  # Update the button reference
-                entry_row[-1] = del_btn  # Update the button reference
-
-        def delete_row(row_idx):
-            entry_grid.pop(row_idx)
-            rebuild_table()
-
-        def add_row_before(row_idx):
-            new_row = [tk.StringVar(value="") for _ in labels]
-            new_row += [None, None]  # Placeholders for buttons
-            entry_grid.insert(row_idx, new_row)
-            rebuild_table()
-
-        # Build initial table
-        for row in data:
-            entry_row = []
-            for val in row:
-                var = tk.StringVar(value=val)
-                entry_row.append(var)
-            entry_row += [None, None]  # Placeholders for add and delete buttons
-            entry_grid.append(entry_row)
-        rebuild_table()  # Draw the table with current data
-
-        def add_row():
-            row_idx = len(entry_grid)
-            entry_row = [tk.StringVar(value="") for _ in labels]
-            entry_row += [None, None]  # Placeholders for add and delete buttons
-            entry_grid.append(entry_row)
-            rebuild_table()
-            top.update_idletasks()
-            top.geometry("")
-
-        def save_and_close():
-            # Collect column-wise data
-            columns = [[] for _ in labels]
-            for row in entry_grid:
-                for col_idx, var in enumerate(row[:-2]):  # skip the last item (button)
-                    val = var.get().strip()
-                    if val != "":
-                        columns[col_idx].append(val)
-            # Update entries
-            for col_idx, label in enumerate(labels):
-                self.entries[label].delete(0, tk.END)
-                self.entries[label].insert(0, ",".join(columns[col_idx]))
-            top.destroy()
-
-        # Frame for buttons
-        button_frame = tk.Frame(top)
-        button_frame.pack(side="bottom", fill="x", pady=5)
-        tk.Button(button_frame, text="Add Row", command=add_row).pack(side="left", padx=5)
-        tk.Button(button_frame, text="Save", command=save_and_close).pack(side="left", padx=5)
-
+        self.canvas_extra = FigureCanvasTkAgg(self.fig, master=self.extra_tab)
+        toolbar = CustomToolbar(self.canvas_extra, self.extra_tab)
+        toolbar.update()
+        toolbar.grid(row=1, column=0,sticky="nsew")
+        self.canvas_extra.get_tk_widget().grid()
     def load_waveform(self):
         key = self.selected_waveform.get()
 
@@ -570,7 +484,6 @@ class DartGUI:
         self.ax.set_title(f"{self.current_key} waveform")
         self.ax.set_xlabel("Time (s)")
         self.ax.set_ylabel("Flow")
-        self.ax.legend()
         self.fig.tight_layout()
         self.canvas.draw()
 
@@ -713,12 +626,12 @@ class DartGUI:
                 "conftime_y": self.editor.y.tolist(),
                 "closure": self.closure_entry.get(),
                 "div2sub": self.div2sub_entry.get(),
-                "frac_div": self.frac_div_entry.get(),
-                "frac_lfs": self.frac_lfs_entry.get(),
                 "cryo": self.cryo.get(),
                 "turbo": self.turbo.get(),
-                "recycling": self.turbo_recycling_entry.get(),
-                "Spump": self.cryo_pumpspeed_entry.get()
+                "nbipump": self.nbipump.get(),
+                "Tpump": self.turbo_pumpspeed_entry.get(),
+                "Spump": self.cryo_pumpspeed_entry.get(),
+                "nbi_S": self.nbi_pumpspeed_entry.get()
             },
             "aim":{
                 "jetto_var": self.jetto_var.get(),
@@ -792,21 +705,22 @@ class DartGUI:
         self.div2sub_entry.delete(0, tk.END)
         self.div2sub_entry.insert(0, guide.get("div2sub", "0.5"))
 
-        self.frac_div_entry.delete(0, tk.END)
-        self.frac_div_entry.insert(0, guide.get("frac_div", "0.1"))
-
-        self.frac_lfs_entry.delete(0, tk.END)
-        self.frac_lfs_entry.insert(0, guide.get("frac_lfs", "0.12"))
-
         self.cryo.set(guide.get("cryo", 1))
         try:
             self.turbo.set(guide.get("turbo", 1))
-            self.turbo_recycling_entry.delete(0, tk.END)
-            self.turbo_recycling_entry.insert(0,guide.get("recycling", "0.98955"))
+            self.turbo_pumpspeed_entry.delete(0, tk.END)
+            self.turbo_pumpspeed_entry.insert(0,guide.get("Tpump", "10"))
             self.cryo_pumpspeed_entry.delete(0, tk.END)
             self.cryo_pumpspeed_entry.insert(0,guide.get("Spump", "10"))
         except Exception as e:
             print("Old save file, skipping recycling and pumping speed")
+        try:
+            self.nbipump.set(guide.get("nbipump", 1))
+            self.nbi_pumpspeed_entry.delete(0, tk.END)
+            self.nbi_pumpspeed_entry.insert(0,guide.get("nbi_S", "5"))
+        except Exception as e:
+            print("Old save file, skipping nbi pumping option")
+        
         messagebox.showinfo("Load Session", f"Inputs loaded from:\n{filepath}")
         self.guide_tab.update_idletasks()
         self.aim_tab.update_idletasks()
@@ -940,6 +854,7 @@ class DartGUI:
             gastraces = None
         self.dart = dart()
         self.dart.time = plasma_details.time
+        self.dart.tend = plasma_details.pulse_end
         self.dart.Ip   = plasma_details.Ip
         self.dart.pvol = plasma_details.vol
         self.dart.Paux = plasma_details.Paux
@@ -977,8 +892,6 @@ class DartGUI:
         self.dart.closure=float(self.closure_entry.get())
         self.dart.div2sub=float(self.div2sub_entry.get())
         
-        hfs_frac       = 1.0 - 0.01 - float(self.frac_div_entry.get()) - float(self.frac_lfs_entry.get())
-        self.dart.plasma_fracs=[float(self.frac_div_entry.get()),float(self.frac_lfs_entry.get()),hfs_frac,0.01,0.0]
         self.dart.alft = np.radians(plasma_details.alft)  
         self.dart.conftime = np.array(self.editor.x)
         self.dart.conf     = np.array(self.editor.y)/1000.0
@@ -990,9 +903,23 @@ class DartGUI:
         else:
             self.dart.Spump = 0.0
         if self.turbo.get():
-            self.dart.recycling = float(self.turbo_recycling_entry.get())
+            volume              = 50.0
+            turbo_pumpspeed     = float(self.turbo_pumpspeed_entry.get())
+            self.dart.recycling = 0.98955
+            self.dart.collision = turbo_pumpspeed/(volume * (1.0-self.dart.recycling))
         else:
             self.dart.recycling = 0.0            
+            self.dart.collision = 0.0
+        if self.nbipump.get():
+            self.dart.nbi_S = float(self.nbi_pumpspeed_entry.get())
+        else:
+            self.dart.nbi_S = 0.0
+        if self.writedart.get():
+            self.dart.writefile = True
+            shot = int(self.shot_entry.get())
+            self.dart.dartfile = f"shotfiles/{shot}.npz"
+        else:
+            self.dart.writefile = False
         self.dart.Twall = 300.0
         self.dart.r_fit     = plasma_details.r_fit
         self.dart.te_fit    = plasma_details.te_fit
@@ -1002,13 +929,11 @@ class DartGUI:
         self.editor.x = np.array(self.dart.conftime)
         self.editor.y = np.array(self.dart.conf)*1000.0
         self.editor.update_plot()
-        self.editgas_button.pack(pady=5, fill="x", padx=10, side="left")
-        self.usegas_checkbox.pack(pady=5, fill="x", padx=10, side="left")
-        #self.root.update_idletasks()  # Refresh GUI
-
         self.plot_shot()        
         self.shotreplot_button.pack(pady=5, fill="x", padx=10)
         self.shotprogress_bar["value"] = 100.0
+        self.editgas_button.pack(pady=5, fill="x", padx=10, side="left")
+        self.usegas_checkbox.pack(pady=5, fill="x", padx=10, side="left")
         self.root.update_idletasks()  # Refresh GUI
     def run_simulation(self):
         if self.jetto_var.get():
@@ -1057,10 +982,12 @@ class DartGUI:
         self.dart.display(canvas=self.canvas_standard)
         self.dart.display_condensed(canvas=self.canvas_condensed)
         self.dart.display_useful(canvas=self.canvas_useful)
+        self.dart.display_talk(canvas=self.canvas_extra)
     def plot_shot(self):
         self.dart.plot_GUIDE(canvas=self.canvas_standard)
         self.dart.plot_GUIDEcondensed(canvas=self.canvas_condensed)
         self.dart.plot_GUIDEuseful(canvas=self.canvas_useful)
+        self.dart.plot_GUIDEextra(canvas=self.canvas_extra)
 
 if __name__ == "__main__":
     root = ttk.Window(themename="litera")

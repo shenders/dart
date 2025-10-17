@@ -12,15 +12,19 @@ def compute_toroidal_volume(R, Z):
 fig, axes = plt.subplots(nrows=1, ncols=1, figsize=(6, 6))
 fig.subplots_adjust(hspace=0.09,left=0.1,top=0.95, bottom=0.15,right=0.96)
 fs = 12
-hfsx,hfsy = np.array([0.32,0.6, 0.6,0.32,0.32]),np.array([-1.31,-1.31,1.31,1.31,-1.31])
-lfsx,lfsy = np.array([0.6,0.83,1.2,2.0,2.0,1.2,0.83,0.6,0.6]),np.array([-1.31,-1.44,-1.02,-1.02,1.02,1.02,1.44,1.31,-1.31])
+hfsx,hfsy = np.array([0.32,0.42, 0.42,0.32,0.32]),np.array([-1.25,-1.25,1.25,1.25,-1.25])
+corx,cory = np.array([0.42, 0.6,1.38,1.38,0.6,0.42,0.42]),np.array([-1.25,-1.25,-0.6,0.6,1.25,1.25,-1.25])
+lfsx,lfsy = np.array([1.2,2.0,2.0,1.2,0.83,0.75,1.47,1.47,0.75,0.83,1.2]),np.array([-1.02,-1.02,1.02,1.02,1.44,1.35,0.64,-0.64,-1.35,-1.44,-1.02])
+solx,soly = np.array([0.6,0.8,0.9,0.75,1.47, 1.47,0.75,0.9,0.8,0.6,1.38,1.38,0.6]),np.array([-1.25,-1.8,-1.9,-1.35,-0.64,0.64,1.35,1.9,1.8,1.25,0.6,-0.6,-1.25])
 slfx,slfy = np.array([0.83,1.2,2.0,2.0,0.87,0.83]),np.array([-1.44,-1.02,-1.02,-1.55,-1.58,-1.44])
-pfrx,pfry = np.array([0.32,0.6, 0.8,0.32]),np.array([1.31,1.31,1.8,1.31])
-divx,divy = np.array([0.6,0.83,0.87,1.75,1.75,1.35,1.1,0.8,0.6]),np.array([1.31,1.44,1.58,1.55,1.7,2.1,2.1,1.8,1.31])
+pfrx,pfry = np.array([0.32,0.32,0.6, 0.8,0.32,0.32]),np.array([1.31,1.25,1.25,1.8,1.31,1.25])
+divx,divy = np.array([0.75,0.83,0.87,1.75,1.75,1.35,1.1,0.9,0.77]),np.array([1.35,1.44,1.58,1.55,1.7,2.1,2.1,1.9,1.44])
 sdvx,sdvy = np.array([1.75,2.0,2.0,1.35,1.35,1.75,1.75]),np.array([1.55,1.55,2.2,2.2,2.1,1.7,1.55])
 ssdx,ssdy = np.array([1.35,1.35,0.32,0.32,1.1,1.35]),np.array([2.1,2.2,2.2,1.31,2.1,2.1])
 
 print("HFS volume:",compute_toroidal_volume(hfsx,hfsy))
+print("COR volume:",compute_toroidal_volume(corx,cory))
+print("SOL volume:",compute_toroidal_volume(solx,soly))
 print("LFS volume:",compute_toroidal_volume(lfsx,lfsy))
 print("SLF volume:",compute_toroidal_volume(slfx,slfy))
 print("PFR volume:",compute_toroidal_volume(pfrx,pfry))
@@ -29,6 +33,8 @@ print("SDV volume:",compute_toroidal_volume(sdvx,sdvy))
 print("SSD volume:",compute_toroidal_volume(ssdx,ssdy))
 print("Total volume:",compute_toroidal_volume(hfsx,hfsy)+\
         compute_toroidal_volume(lfsx,lfsy) + \
+        compute_toroidal_volume(corx,cory) + \
+        compute_toroidal_volume(solx,soly) + \
         compute_toroidal_volume(slfx,slfy)*2 + \
         compute_toroidal_volume(pfrx,pfry) + \
         compute_toroidal_volume(divx,divy)*2 + \
@@ -36,6 +42,8 @@ print("Total volume:",compute_toroidal_volume(hfsx,hfsy)+\
         compute_toroidal_volume(sdvx,sdvy)*2)
 
 axes.fill(hfsx,hfsy,label='HFS',alpha=0.6,edgecolor='black')
+axes.fill(corx,cory,label='COR',alpha=0.6,edgecolor='black')
+axes.fill(solx,soly,label='SOL',alpha=0.6,edgecolor='black')
 axes.fill(pfrx,-pfry,label='LPFR',alpha=0.6,edgecolor='black')
 axes.fill(pfrx,pfry,label='UPFR',alpha=0.6,edgecolor='black')
 axes.fill(lfsx,lfsy,label='LFS',alpha=0.6,edgecolor='black')
@@ -54,7 +62,7 @@ axes.fill([1.98,2.2,2.2,1.98,1.98],[1.9,1.9,1.86,1.86,1.9],alpha=0.6,edgecolor='
 axes.legend(fontsize=fs,loc='upper right')
 axes.set_xlabel('R / m',fontsize=fs)
 axes.set_ylabel('Z / m',fontsize=fs)
-axes.set_xlim([0,3.0])
+axes.set_xlim([0,5.0])
 axes.set_ylim([-2.2,2.2])
 axes.set_aspect(aspect=1.0)
 
